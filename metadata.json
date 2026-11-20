@@ -1,0 +1,8 @@
+{
+  "name": "HostGraber Internal Pricing Portal",
+  "description": "Internal hosting plan catalog, Excel pricing importer, and one-click plain-text quotation portal for HostGraber.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
