@@ -39,6 +39,25 @@ import {
   inspectWorkbookBuffer,
 } from './src/db/excel.ts';
 import {
+  LeadAccessDeniedError,
+  addLeadRemarkRecord,
+  bulkImportLeadRecords,
+  createLeadRecord,
+  deleteLeadRecord,
+  deleteLeadsBulk,
+  fetchLeadAccessLogs,
+  fetchLeadById,
+  fetchLeadColleagues,
+  fetchScopedLeads,
+  getOrEnsureAiSensyWebhookSecret,
+  ingestAiSensyWebhookLead,
+  lockColleagueLeads,
+  rotateAiSensyWebhookSecret,
+  setUserLeadSecurityCode,
+  unlockColleagueLeads,
+  updateLeadRecord,
+} from './src/db/leads.ts';
+import {
   extractSessionToken,
   requireAdminSession,
   requirePasswordChanged,
@@ -56,6 +75,7 @@ import type {
   ColumnMappingEntry,
   ImportMode,
   ImportPreviewRow,
+  LeadInterventionScope,
   UserRole,
 } from './src/shared/types.ts';
 
@@ -182,6 +202,7 @@ function sanitizeUser(u: typeof users.$inferSelect) {
     role: u.role as UserRole,
     mustChangePassword: u.mustChangePassword,
     isActive: u.isActive,
+    hasLeadSecurityCode: Boolean(u.leadSecurityCodeHash),
     createdAt: u.createdAt.toISOString(),
     updatedAt: u.updatedAt.toISOString(),
   };
@@ -1608,6 +1629,618 @@ app.delete(
     }
   }
 );
+
+// =========================================================================
+// LEAD MANAGE CRM, INTERVENTION SECURITY & WEBHOOK ROUTES
+// =========================================================================
+
+function resolveWebhookUrl(req: Request): string {
+  const envUrl = (process.env.APP_URL || '').trim();
+  if (envUrl && envUrl !== 'MY_APP_URL') {
+    try {
+      const parsed = new URL(envUrl);
+      return `${parsed.origin}/api/webhooks/leads`;
+    } catch {
+      // fallback to request headers
+    }
+  }
+  const protoHeader = req.headers['x-forwarded-proto'];
+  const proto =
+    typeof protoHeader === 'string' && protoHeader.trim()
+      ? protoHeader.split(',')[0].trim()
+      : req.protocol || 'https';
+  const hostHeader = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
+  const host = Array.isArray(hostHeader) ? hostHeader[0] : hostHeader;
+  return `${proto}://${host}/api/webhooks/leads`;
+}
+
+function constantTimeSecretMatch(provided: string, expected: string): boolean {
+  if (!provided || !expected) return false;
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function getLeadAccessContext(req: AuthRequest) {
+  const viewerUserId = req.dbUser!.id;
+  const viewerName = req.dbUser!.displayName || req.dbUser!.username;
+  const sessionTokenHash = hashSessionToken(req.sessionToken || '');
+  return { viewerUserId, viewerName, sessionTokenHash };
+}
+
+app.get(
+  '/api/leads',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const access = getLeadAccessContext(req);
+      const rawScope = typeof req.query.scope === 'string' ? req.query.scope : 'me';
+      const scope: LeadInterventionScope =
+        rawScope === 'any' || rawScope === 'other' || rawScope === 'user'
+          ? rawScope
+          : 'me';
+      const targetUserId = req.query.userId ? Number(req.query.userId) : null;
+      const logSwitch = req.query.logSwitch === '1';
+
+      const items = await fetchScopedLeads({
+        scope,
+        targetUserId:
+          targetUserId && !Number.isNaN(targetUserId) ? targetUserId : null,
+        viewerUserId: access.viewerUserId,
+        viewerName: access.viewerName,
+        sessionTokenHash: access.sessionTokenHash,
+        logSwitch,
+      });
+      res.json(items);
+    } catch (error) {
+      if (error instanceof LeadAccessDeniedError) {
+        res.status(403).json({
+          error: error.message,
+          requiresUnlock: true,
+          targetUserId: error.targetUserId,
+        });
+        return;
+      }
+      console.error('GET /api/leads failed:', error);
+      res.status(500).json({ error: 'Failed to load leads.' });
+    }
+  }
+);
+
+app.get(
+  '/api/leads/colleagues',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const access = getLeadAccessContext(req);
+      const result = await fetchLeadColleagues(
+        access.viewerUserId,
+        access.sessionTokenHash
+      );
+      res.json(result);
+    } catch (error) {
+      console.error('GET /api/leads/colleagues failed:', error);
+      res.status(500).json({ error: 'Failed to load team members.' });
+    }
+  }
+);
+
+app.post(
+  '/api/leads/security-code',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const body = req.body as { securityCode?: string };
+      await setUserLeadSecurityCode(req.dbUser!.id, body.securityCode || '');
+      res.json({ ok: true, hasLeadSecurityCode: true });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to save security code.';
+      res.status(400).json({ error: message });
+    }
+  }
+);
+
+app.post(
+  '/api/leads/unlock',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const access = getLeadAccessContext(req);
+      const body = req.body as { targetUserId?: number; securityCode?: string };
+      const targetUserId = Number(body.targetUserId);
+      if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+        res.status(400).json({ error: 'Valid colleague user ID is required.' });
+        return;
+      }
+
+      const result = await unlockColleagueLeads({
+        sessionTokenHash: access.sessionTokenHash,
+        viewerUserId: access.viewerUserId,
+        viewerName: access.viewerName,
+        targetUserId,
+        securityCode: body.securityCode || '',
+      });
+      res.json({ ok: true, ...result });
+    } catch (error) {
+      if (error instanceof LeadAccessDeniedError) {
+        res.status(403).json({ error: error.message });
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'Failed to verify security code.';
+      res.status(400).json({ error: message });
+    }
+  }
+);
+
+app.post(
+  '/api/leads/lock',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const access = getLeadAccessContext(req);
+      const body = req.body as { targetUserId?: number };
+      const targetUserId = Number(body.targetUserId);
+      if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+        res.status(400).json({ error: 'Valid colleague user ID is required.' });
+        return;
+      }
+      await lockColleagueLeads({
+        sessionTokenHash: access.sessionTokenHash,
+        viewerUserId: access.viewerUserId,
+        targetUserId,
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      console.error('POST /api/leads/lock failed:', error);
+      res.status(500).json({ error: 'Failed to lock colleague lead access.' });
+    }
+  }
+);
+
+app.get(
+  '/api/leads/access-logs',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const logs = await fetchLeadAccessLogs({
+        viewerUserId: req.dbUser!.id,
+        isSuperAdmin: req.dbUser!.role === 'super_admin',
+      });
+      res.json(logs);
+    } catch (error) {
+      console.error('GET /api/leads/access-logs failed:', error);
+      res.status(500).json({ error: 'Failed to load access logs.' });
+    }
+  }
+);
+
+app.get(
+  '/api/leads/webhook-config',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req, res) => {
+    try {
+      const webhookSecret = await getOrEnsureAiSensyWebhookSecret();
+      res.json({
+        webhookUrl: resolveWebhookUrl(req),
+        webhookSecret,
+      });
+    } catch (error) {
+      console.error('GET /api/leads/webhook-config failed:', error);
+      res.status(500).json({ error: 'Failed to load webhook configuration.' });
+    }
+  }
+);
+
+app.post(
+  '/api/leads/webhook-config/rotate',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const actor = req.dbUser?.displayName || req.dbUser?.username || 'admin';
+      const webhookSecret = await rotateAiSensyWebhookSecret(actor);
+      res.json({
+        webhookUrl: resolveWebhookUrl(req),
+        webhookSecret,
+      });
+    } catch (error) {
+      console.error('POST /api/leads/webhook-config/rotate failed:', error);
+      res.status(500).json({ error: 'Failed to rotate webhook secret.' });
+    }
+  }
+);
+
+app.get(
+  '/api/leads/:id',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'Invalid lead ID.' });
+        return;
+      }
+      const access = getLeadAccessContext(req);
+      const lead = await fetchLeadById(id, {
+        viewerUserId: access.viewerUserId,
+        sessionTokenHash: access.sessionTokenHash,
+      });
+      if (!lead) {
+        res.status(404).json({ error: 'Lead not found.' });
+        return;
+      }
+      res.json(lead);
+    } catch (error) {
+      if (error instanceof LeadAccessDeniedError) {
+        res.status(403).json({
+          error: error.message,
+          requiresUnlock: true,
+          targetUserId: error.targetUserId,
+        });
+        return;
+      }
+      console.error('GET /api/leads/:id failed:', error);
+      res.status(500).json({ error: 'Failed to load lead details.' });
+    }
+  }
+);
+
+app.post(
+  '/api/leads',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const access = getLeadAccessContext(req);
+      const body = req.body as {
+        ownerUserId?: number | null;
+        name?: string;
+        phone?: string;
+        source?: string;
+        campaignName?: string | null;
+        status?: string;
+        latestRemark?: string | null;
+        leadDate?: string | null;
+        followUpDate?: string | null;
+      };
+
+      const created = await createLeadRecord(
+        {
+          ownerUserId:
+            body.ownerUserId && Number.isInteger(Number(body.ownerUserId))
+              ? Number(body.ownerUserId)
+              : access.viewerUserId,
+          name: body.name || '',
+          phone: body.phone || '',
+          source: body.source || 'manual',
+          campaignName: body.campaignName ?? null,
+          status: body.status || 'call_needed',
+          latestRemark: body.latestRemark ?? '',
+          leadDate: body.leadDate ?? null,
+          followUpDate: body.followUpDate ?? null,
+          actor: access.viewerName,
+        },
+        access
+      );
+      res.status(201).json(created);
+    } catch (error) {
+      if (error instanceof LeadAccessDeniedError) {
+        res.status(403).json({ error: error.message, requiresUnlock: true });
+        return;
+      }
+      console.error('POST /api/leads failed:', error);
+      const message = error instanceof Error ? error.message : 'Failed to create lead.';
+      res.status(400).json({ error: message });
+    }
+  }
+);
+
+app.put(
+  '/api/leads/:id',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'Invalid lead ID.' });
+        return;
+      }
+      const access = getLeadAccessContext(req);
+      const body = req.body as {
+        name?: string;
+        phone?: string;
+        source?: string;
+        campaignName?: string | null;
+        status?: string;
+        latestRemark?: string | null;
+        leadDate?: string | null;
+        followUpDate?: string | null;
+      };
+
+      const updated = await updateLeadRecord(
+        id,
+        {
+          ...body,
+          actor: access.viewerName,
+        },
+        access
+      );
+      if (!updated) {
+        res.status(404).json({ error: 'Lead not found.' });
+        return;
+      }
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof LeadAccessDeniedError) {
+        res.status(403).json({ error: error.message, requiresUnlock: true });
+        return;
+      }
+      console.error('PUT /api/leads/:id failed:', error);
+      const message = error instanceof Error ? error.message : 'Failed to update lead.';
+      res.status(400).json({ error: message });
+    }
+  }
+);
+
+app.post(
+  '/api/leads/:id/remarks',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'Invalid lead ID.' });
+        return;
+      }
+      const access = getLeadAccessContext(req);
+      const body = req.body as {
+        remark?: string;
+        statusAtCall?: string;
+        callDate?: string | null;
+        followUpDate?: string | null;
+      };
+
+      const updated = await addLeadRemarkRecord(
+        id,
+        {
+          remark: body.remark || '',
+          statusAtCall: body.statusAtCall || 'call_needed',
+          callDate: body.callDate ?? null,
+          followUpDate: body.followUpDate,
+          actor: access.viewerName,
+        },
+        access
+      );
+      if (!updated) {
+        res.status(404).json({ error: 'Lead not found.' });
+        return;
+      }
+      res.status(201).json(updated);
+    } catch (error) {
+      if (error instanceof LeadAccessDeniedError) {
+        res.status(403).json({ error: error.message, requiresUnlock: true });
+        return;
+      }
+      console.error('POST /api/leads/:id/remarks failed:', error);
+      const message = error instanceof Error ? error.message : 'Failed to add call remark.';
+      res.status(400).json({ error: message });
+    }
+  }
+);
+
+app.post(
+  '/api/leads/parse-import',
+  requireAdminSession,
+  requirePasswordChanged,
+  upload.single('file'),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        res.status(400).json({ error: 'Upload a CSV or Excel file first.' });
+        return;
+      }
+
+      const workbook = XLSX.read(req.file.buffer, { type: 'buffer', raw: false });
+      const sheetName = workbook.SheetNames[0];
+      if (!sheetName) {
+        res.status(400).json({ error: 'No worksheet found in the uploaded file.' });
+        return;
+      }
+
+      const sheet = workbook.Sheets[sheetName];
+      const rawMatrix = XLSX.utils.sheet_to_json<string[]>(sheet, {
+        header: 1,
+        defval: '',
+        blankrows: false,
+      });
+
+      if (rawMatrix.length === 0) {
+        res.status(400).json({ error: 'The uploaded file is empty.' });
+        return;
+      }
+
+      const headers = rawMatrix[0].map((cell) => String(cell ?? '').trim());
+      const rows = rawMatrix.slice(1).map((row) => {
+        const record: Record<string, string> = {};
+        headers.forEach((header, idx) => {
+          const key = header || `Column ${idx + 1}`;
+          record[key] = String(row[idx] ?? '').trim();
+        });
+        return record;
+      });
+
+      res.json({ headers, rows });
+    } catch (error) {
+      console.error('POST /api/leads/parse-import failed:', error);
+      res.status(400).json({ error: 'Unable to parse uploaded CSV/Excel file.' });
+    }
+  }
+);
+
+app.post(
+  '/api/leads/import',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const access = getLeadAccessContext(req);
+      const body = req.body as {
+        ownerUserId?: number | null;
+        rows?: Array<{
+          name?: string;
+          phone?: string;
+          remark?: string;
+          status?: string;
+          source?: string;
+          leadDate?: string;
+          followUpDate?: string;
+          campaignName?: string;
+        }>;
+      };
+
+      if (!Array.isArray(body.rows) || body.rows.length === 0) {
+        res.status(400).json({ error: 'Provide at least one lead row to import.' });
+        return;
+      }
+
+      if (body.rows.length > 2000) {
+        res.status(400).json({ error: 'Maximum 2,000 leads per import batch.' });
+        return;
+      }
+
+      const targetOwnerId =
+        body.ownerUserId && Number.isInteger(Number(body.ownerUserId))
+          ? Number(body.ownerUserId)
+          : access.viewerUserId;
+
+      const result = await bulkImportLeadRecords(
+        body.rows,
+        access.viewerName,
+        targetOwnerId,
+        access
+      );
+      res.json(result);
+    } catch (error) {
+      if (error instanceof LeadAccessDeniedError) {
+        res.status(403).json({ error: error.message, requiresUnlock: true });
+        return;
+      }
+      console.error('POST /api/leads/import failed:', error);
+      res.status(400).json({ error: 'Failed to import leads.' });
+    }
+  }
+);
+
+app.post(
+  '/api/leads/bulk-delete',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const access = getLeadAccessContext(req);
+      const body = req.body as { ids?: unknown };
+      if (!Array.isArray(body.ids)) {
+        res.status(400).json({ error: 'ids array is required.' });
+        return;
+      }
+      const ids = body.ids
+        .map((val) => Number(val))
+        .filter((val) => Number.isInteger(val) && val > 0);
+      const deletedCount = await deleteLeadsBulk(ids, access);
+      res.json({ deletedCount });
+    } catch (error) {
+      if (error instanceof LeadAccessDeniedError) {
+        res.status(403).json({ error: error.message, requiresUnlock: true });
+        return;
+      }
+      console.error('POST /api/leads/bulk-delete failed:', error);
+      res.status(500).json({ error: 'Failed to delete selected leads.' });
+    }
+  }
+);
+
+app.delete(
+  '/api/leads/:id',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'Invalid lead ID.' });
+        return;
+      }
+      const access = getLeadAccessContext(req);
+      const deleted = await deleteLeadRecord(id, access);
+      if (!deleted) {
+        res.status(404).json({ error: 'Lead not found.' });
+        return;
+      }
+      res.json({ deleted: true, id });
+    } catch (error) {
+      if (error instanceof LeadAccessDeniedError) {
+        res.status(403).json({ error: error.message, requiresUnlock: true });
+        return;
+      }
+      console.error('DELETE /api/leads/:id failed:', error);
+      res.status(500).json({ error: 'Failed to delete lead.' });
+    }
+  }
+);
+
+// Public webhook endpoint for inbound CRM / WhatsApp leads (authenticated via shared secret)
+async function handleInboundLeadWebhook(req: Request, res: Response) {
+  try {
+    const expectedSecret = await getOrEnsureAiSensyWebhookSecret();
+    const headerSecret =
+      (typeof req.headers['x-aisensy-secret'] === 'string' &&
+        req.headers['x-aisensy-secret']) ||
+      (typeof req.headers['x-webhook-secret'] === 'string' &&
+        req.headers['x-webhook-secret']) ||
+      '';
+    const authHeader =
+      typeof req.headers.authorization === 'string' &&
+      req.headers.authorization.startsWith('Bearer ')
+        ? req.headers.authorization.slice(7).trim()
+        : '';
+    const queryToken =
+      typeof req.query.token === 'string' ? req.query.token.trim() : '';
+
+    const providedSecret = (headerSecret || authHeader || queryToken).trim();
+    if (!constantTimeSecretMatch(providedSecret, expectedSecret)) {
+      res.status(401).json({ error: 'Invalid or missing webhook secret.' });
+      return;
+    }
+
+    const result = await ingestAiSensyWebhookLead(req.body);
+    res.status(result.action === 'created' ? 201 : 200).json({
+      ok: true,
+      action: result.action,
+      leadId: result.lead.id,
+    });
+  } catch (error) {
+    console.error('Lead webhook failed:', error);
+    const message =
+      error instanceof Error ? error.message : 'Invalid webhook payload.';
+    res.status(400).json({ error: message });
+  }
+}
+
+app.post('/api/webhooks/leads', handleInboundLeadWebhook);
+app.post('/api/webhooks/aisensy', handleInboundLeadWebhook);
 
 // Global error handler
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

@@ -26,6 +26,7 @@ export interface PortalUser {
   role: UserRole;
   mustChangePassword: boolean;
   isActive: boolean;
+  hasLeadSecurityCode?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -251,3 +252,81 @@ export interface PlanChangeLogItem {
   updatedBy: string;
   changedAt: string;
 }
+
+export type LeadStatus =
+  | 'positive'
+  | 'call_needed'
+  | 'deny'
+  | 'converted'
+  | 'existing_client';
+
+export type LeadSource =
+  | 'manual'
+  | 'whatsapp'
+  | 'inbound_call'
+  | 'website'
+  | 'referral'
+  | 'aisensy'
+  | 'csv_import'
+  | 'other';
+
+export interface LeadRemarkItem {
+  id: number;
+  leadId: number;
+  remark: string;
+  statusAtCall: LeadStatus;
+  callDate: string;
+  followUpDate: string | null;
+  loggedBy: string;
+  createdAt: string;
+}
+
+export interface LeadItem {
+  id: number;
+  ownerUserId: number | null;
+  ownerName: string;
+  name: string;
+  phone: string;
+  normalizedPhone: string;
+  source: LeadSource;
+  campaignName: string | null;
+  status: LeadStatus;
+  latestRemark: string;
+  leadDate: string;
+  followUpDate: string | null;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+  remarksCount: number;
+  remarks?: LeadRemarkItem[];
+}
+
+export type LeadInterventionScope = 'me' | 'any' | 'other' | 'user';
+
+export interface LeadColleagueOption {
+  id: number;
+  username: string;
+  displayName: string;
+  role: UserRole;
+  hasSecurityCode: boolean;
+  unlocked: boolean;
+  leadCount: number;
+}
+
+export interface LeadAccessLogItem {
+  id: number;
+  viewerUserId: number | null;
+  viewerName: string;
+  targetUserId: number | null;
+  targetName: string;
+  action: string;
+  details: string | null;
+  createdAt: string;
+}
+
+export interface LeadWebhookConfig {
+  webhookUrl: string;
+  webhookSecret: string;
+}
+

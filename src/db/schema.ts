@@ -17,6 +17,7 @@ export const users = pgTable('users', {
   email: text('email').notNull().unique(),
   displayName: text('display_name'),
   passwordHash: text('password_hash').notNull(),
+  leadSecurityCodeHash: text('lead_security_code_hash'),
   role: text('role').notNull().default('admin'), // 'super_admin' | 'admin'
   mustChangePassword: boolean('must_change_password').notNull().default(false),
   isActive: boolean('is_active').notNull().default(true),
@@ -56,6 +57,7 @@ export const settings = pgTable('settings', {
       'biennially',
       'triennially',
     ]),
+  aisensyWebhookSecret: text('aisensy_webhook_secret'),
   updatedBy: text('updated_by'),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -210,5 +212,80 @@ export const planOffersRelations = relations(planOffers, ({ one }) => ({
   plan: one(hostingPlans, {
     fields: [planOffers.planId],
     references: [hostingPlans.id],
+  }),
+}));
+
+export const leads = pgTable('leads', {
+  id: serial('id').primaryKey(),
+  ownerUserId: integer('owner_user_id').references(() => users.id, { onDelete: 'set null' }),
+  ownerName: text('owner_name').notNull().default(''),
+  name: text('name').notNull(),
+  phone: text('phone').notNull(),
+  normalizedPhone: text('normalized_phone').notNull(),
+  source: text('source').notNull().default('manual'),
+  campaignName: text('campaign_name'),
+  status: text('status').notNull().default('call_needed'),
+  latestRemark: text('latest_remark').notNull().default(''),
+  leadDate: text('lead_date').notNull(),
+  followUpDate: text('follow_up_date'),
+  createdBy: text('created_by').notNull().default('admin'),
+  updatedBy: text('updated_by').notNull().default('admin'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const leadRemarks = pgTable('lead_remarks', {
+  id: serial('id').primaryKey(),
+  leadId: integer('lead_id')
+    .references(() => leads.id, { onDelete: 'cascade' })
+    .notNull(),
+  remark: text('remark').notNull(),
+  statusAtCall: text('status_at_call').notNull(),
+  callDate: text('call_date').notNull(),
+  followUpDate: text('follow_up_date'),
+  loggedBy: text('logged_by').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const leadAccessGrants = pgTable('lead_access_grants', {
+  id: serial('id').primaryKey(),
+  sessionTokenHash: text('session_token_hash').notNull(),
+  viewerUserId: integer('viewer_user_id')
+    .references(() => users.id, { onDelete: 'cascade' })
+    .notNull(),
+  targetUserId: integer('target_user_id')
+    .references(() => users.id, { onDelete: 'cascade' })
+    .notNull(),
+  grantedAt: timestamp('granted_at').defaultNow().notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+});
+
+export const leadAccessLogs = pgTable('lead_access_logs', {
+  id: serial('id').primaryKey(),
+  viewerUserId: integer('viewer_user_id').references(() => users.id, {
+    onDelete: 'set null',
+  }),
+  viewerName: text('viewer_name').notNull(),
+  targetUserId: integer('target_user_id').references(() => users.id, {
+    onDelete: 'set null',
+  }),
+  targetName: text('target_name').notNull(),
+  action: text('action').notNull(),
+  details: text('details'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const leadsRelations = relations(leads, ({ one, many }) => ({
+  owner: one(users, {
+    fields: [leads.ownerUserId],
+    references: [users.id],
+  }),
+  remarks: many(leadRemarks),
+}));
+
+export const leadRemarksRelations = relations(leadRemarks, ({ one }) => ({
+  lead: one(leads, {
+    fields: [leadRemarks.leadId],
+    references: [leads.id],
   }),
 }));

@@ -7,6 +7,7 @@ import {
   Download,
   Edit3,
   FileText,
+  MessageCircle,
 } from 'lucide-react';
 import type {
   HostingPlanFull,
@@ -30,6 +31,7 @@ import {
   TenureSelectDropdown,
   type TenureFilterValue,
 } from './TenureSelectDropdown.tsx';
+import { WhatsAppQuoteModal } from './WhatsAppQuoteModal.tsx';
 
 export function PlanDetailsView({
   plan,
@@ -53,6 +55,7 @@ export function PlanDetailsView({
   const [copiedMode, setCopiedMode] = useState<QuotationCopyMode | null>(null);
   const [showCopyMenu, setShowCopyMenu] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
 
   useEffect(() => {
     setTenureFilter(initialTenureFilter);
@@ -175,6 +178,15 @@ export function PlanDetailsView({
           >
             <FileText className="w-3.5 h-3.5 text-[#059669]" />
             <span>{exportingPdf ? 'Exporting...' : 'Export PDF'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowWhatsAppModal(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-[#047857] bg-[#ECFDF5] border border-[#A7F3D0] rounded-lg hover:bg-[#D1FAE5] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <MessageCircle className="w-3.5 h-3.5" />
+            <span>WhatsApp</span>
           </button>
 
           {canEdit && onEdit && (
@@ -476,18 +488,28 @@ export function PlanDetailsView({
 
         <aside className="lg:col-span-5 lg:sticky lg:top-24">
           <div className="bg-white border border-[#E2E8F0] rounded-xl p-6">
-            <div className="flex items-center justify-between gap-2 pb-3 border-b border-[#E2E8F0]">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[#E2E8F0]">
               <h3 className="text-sm font-semibold text-[#0F172A]">
                 Quotation Text
               </h3>
-              <button
-                type="button"
-                onClick={() => handleCopy('complete')}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <Copy className="w-3.5 h-3.5" />
-                <span>Copy</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowWhatsAppModal(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#047857] bg-[#ECFDF5] border border-[#A7F3D0] hover:bg-[#D1FAE5] rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span>WhatsApp</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCopy('complete')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copy</span>
+                </button>
+              </div>
             </div>
 
             <pre className="mt-4 p-4 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] text-xs leading-relaxed text-[#1E293B] font-mono whitespace-pre-wrap break-words max-h-[540px] overflow-y-auto">
@@ -496,6 +518,15 @@ export function PlanDetailsView({
           </div>
         </aside>
       </div>
+
+      <WhatsAppQuoteModal
+        isOpen={showWhatsAppModal}
+        title={plan.name}
+        scopeLabel={tenureLabel}
+        initialMessage={quotationPreview}
+        onClose={() => setShowWhatsAppModal(false)}
+        onToast={onToast}
+      />
     </div>
   );
 }

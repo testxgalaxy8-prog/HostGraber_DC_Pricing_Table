@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Download,
   FileText,
+  MessageCircle,
 } from 'lucide-react';
 import { apiFetch } from '../lib/api.ts';
 import { copyTextToClipboard } from '../lib/clipboard.ts';
@@ -39,6 +40,7 @@ import {
   TenureSelectDropdown,
   type TenureFilterValue,
 } from './TenureSelectDropdown.tsx';
+import { WhatsAppQuoteModal } from './WhatsAppQuoteModal.tsx';
 
 type LayoutMode = 'cards' | 'list' | 'table';
 
@@ -72,6 +74,11 @@ export function PortalView({
   const [copiedPlanId, setCopiedPlanId] = useState<number | null>(null);
   const [selectedPlanIds, setSelectedPlanIds] = useState<number[]>([]);
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [whatsappTarget, setWhatsappTarget] = useState<{
+    title: string;
+    scopeLabel: string;
+    message: string;
+  } | null>(null);
 
   const loadPlans = useCallback(async () => {
     setLoading(true);
@@ -276,6 +283,36 @@ export function PortalView({
     } else {
       onToast('error', 'Unable to write to clipboard.');
     }
+  };
+
+  const handleOpenWhatsAppPlan = (plan: HostingPlanFull) => {
+    const message = generateQuotationText(plan, settings, 'complete', billingFilter);
+    setWhatsappTarget({
+      title: plan.name,
+      scopeLabel: tenureLabel,
+      message,
+    });
+  };
+
+  const handleOpenWhatsAppSelection = () => {
+    if (selectedPlans.length === 0) return;
+    const message =
+      selectedPlans.length === 1
+        ? generateQuotationText(selectedPlans[0], settings, 'complete', billingFilter)
+        : generateMultiPlanQuotationText(
+            selectedPlans,
+            settings,
+            'complete',
+            billingFilter
+          );
+    setWhatsappTarget({
+      title:
+        selectedPlans.length === 1
+          ? selectedPlans[0].name
+          : `${selectedPlans.length} Selected Plans`,
+      scopeLabel: tenureLabel,
+      message,
+    });
   };
 
   const handleExportCsv = () => {
@@ -615,6 +652,14 @@ export function PortalView({
             </button>
             <button
               type="button"
+              onClick={handleOpenWhatsAppSelection}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#047857] bg-white border border-[#10B981] hover:bg-[#D1FAE5]/40 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <MessageCircle className="w-3.5 h-3.5" />
+              <span>WhatsApp</span>
+            </button>
+            <button
+              type="button"
               onClick={handleExportCsv}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#065F46] bg-white border border-[#A7F3D0] hover:bg-[#F8FAFC] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
             >
@@ -832,6 +877,13 @@ export function PortalView({
                       </button>
                       <button
                         type="button"
+                        onClick={() => handleOpenWhatsAppPlan(plan)}
+                        className="text-xs font-semibold text-[#047857] hover:underline cursor-pointer"
+                      >
+                        WhatsApp
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => onSelectPlan(plan)}
                         className="text-xs font-medium text-[#475569] hover:text-[#0F172A] cursor-pointer"
                       >
@@ -945,7 +997,7 @@ export function PortalView({
                   })}
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <button
                     type="button"
                     onClick={() => handleQuickCopy(plan, 'complete')}
@@ -962,6 +1014,14 @@ export function PortalView({
                         <span>Copy Plan</span>
                       </>
                     )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenWhatsAppPlan(plan)}
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-[#047857] bg-[#ECFDF5] border border-[#A7F3D0] hover:bg-[#D1FAE5] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5" />
+                    <span>WhatsApp</span>
                   </button>
                   <button
                     type="button"
@@ -1136,11 +1196,11 @@ export function PortalView({
                 </div>
 
                 {/* Card Actions */}
-                <div className="mt-5 pt-4 border-t border-[#F1F5F9] flex items-center gap-2.5">
+                <div className="mt-5 pt-4 border-t border-[#F1F5F9] flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     onClick={() => handleQuickCopy(plan, 'complete')}
-                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                    className="flex-1 min-w-[96px] inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
                   >
                     {copiedPlanId === plan.id ? (
                       <>
@@ -1156,8 +1216,17 @@ export function PortalView({
                   </button>
                   <button
                     type="button"
+                    onClick={() => handleOpenWhatsAppPlan(plan)}
+                    aria-label={`Send ${plan.name} quote on WhatsApp`}
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-[#047857] bg-[#ECFDF5] border border-[#A7F3D0] hover:bg-[#D1FAE5] rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5" />
+                    <span>WhatsApp</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => onSelectPlan(plan)}
-                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-medium text-[#334155] bg-white border border-[#CBD5E1] hover:bg-[#F8FAFC] hover:text-[#0F172A] rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-[#334155] bg-white border border-[#CBD5E1] hover:bg-[#F8FAFC] hover:text-[#0F172A] rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
                   >
                     <Eye className="w-3.5 h-3.5" />
                     <span>Details</span>
@@ -1168,6 +1237,15 @@ export function PortalView({
           })}
         </div>
       )}
+
+      <WhatsAppQuoteModal
+        isOpen={whatsappTarget !== null}
+        title={whatsappTarget?.title ?? ''}
+        scopeLabel={whatsappTarget?.scopeLabel ?? tenureLabel}
+        initialMessage={whatsappTarget?.message ?? ''}
+        onClose={() => setWhatsappTarget(null)}
+        onToast={onToast}
+      />
     </div>
   );
 }

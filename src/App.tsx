@@ -10,9 +10,11 @@ import {
   Layers,
   LayoutDashboard,
   LayoutGrid,
+  Lock,
   LogIn,
   LogOut,
   Menu,
+  PhoneCall,
   Server,
   Settings,
   Users,
@@ -22,6 +24,7 @@ import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 import { LoginView } from './components/LoginView.tsx';
 import { ChangePasswordView } from './components/ChangePasswordView.tsx';
 import { PortalView } from './components/PortalView.tsx';
+import { LeadManageView } from './components/leads/LeadManageView.tsx';
 import { AdminPanel, type AdminTab } from './components/AdminPanel.tsx';
 import { BrandMark } from './components/BrandMark.tsx';
 import { ToastContainer, type ToastMessage } from './components/Toast.tsx';
@@ -43,7 +46,8 @@ const ADMIN_NAV_ITEMS: Array<{
 
 function PortalShell() {
   const { user, settings, categories, loading, logout, refreshSession } = useAuth();
-  const [view, setView] = useState<'portal' | 'login' | 'admin' | 'change_password'>('portal');
+  const [view, setView] = useState<'portal' | 'login' | 'admin' | 'leads' | 'change_password'>('portal');
+  const [postLoginView, setPostLoginView] = useState<'admin' | 'leads'>('admin');
   const [adminTab, setAdminTab] = useState<AdminTab>('dashboard');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [portalInspectPlan, setPortalInspectPlan] = useState<HostingPlanFull | null>(null);
@@ -81,9 +85,9 @@ function PortalShell() {
       return 'change_password';
     }
     if (view === 'login' && user) {
-      return 'admin';
+      return postLoginView;
     }
-    if ((view === 'admin' || view === 'change_password') && !user) {
+    if ((view === 'admin' || view === 'leads' || view === 'change_password') && !user) {
       return 'login';
     }
     return view;
@@ -95,6 +99,18 @@ function PortalShell() {
     setPortalInspectPlan(null);
     setView('portal');
     setMobileSidebarOpen(false);
+  };
+
+  const navigateToLeads = () => {
+    if (user?.mustChangePassword) return;
+    setMobileSidebarOpen(false);
+    if (!user || !isAdmin) {
+      setPostLoginView('leads');
+      setView('login');
+      addToast('error', 'Please sign in as Admin to access Lead Manage.');
+      return;
+    }
+    setView('leads');
   };
 
   const navigateToAdminTab = (tab: AdminTab) => {
@@ -111,6 +127,9 @@ function PortalShell() {
     }
     if (effectiveView === 'change_password') {
       return { title: 'Update Password', crumbs: ['Home', 'Security'] };
+    }
+    if (effectiveView === 'leads') {
+      return { title: 'Lead Manage', crumbs: ['Home', 'Lead Manage'] };
     }
     if (effectiveView === 'admin') {
       const tabLabel =
@@ -253,6 +272,29 @@ function PortalShell() {
                   )}
                 </div>
               )}
+
+              <button
+                type="button"
+                onClick={navigateToLeads}
+                title="Lead Manage"
+                className={`w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg text-[13.5px] transition-colors cursor-pointer whitespace-nowrap ${
+                  effectiveView === 'leads'
+                    ? 'bg-[#2B3240] text-white font-medium'
+                    : 'text-[#B6C2CF] hover:bg-[#252B36] hover:text-white'
+                } ${compact ? 'justify-center' : ''}`}
+              >
+                <span className="flex items-center gap-2.5 min-w-0">
+                  <PhoneCall
+                    className={`w-4 h-4 shrink-0 ${
+                      effectiveView === 'leads' ? 'text-[#17C964]' : 'text-[#8C9BAB]'
+                    }`}
+                  />
+                  {!compact && <span className="truncate">Lead Manage</span>}
+                </span>
+                {!compact && !isAdmin && (
+                  <Lock className="w-3.5 h-3.5 text-[#64748B] shrink-0" />
+                )}
+              </button>
             </div>
           )}
 
@@ -296,6 +338,7 @@ function PortalShell() {
               <button
                 type="button"
                 onClick={() => {
+                  setPostLoginView('admin');
                   setView('login');
                   setMobileSidebarOpen(false);
                 }}
@@ -460,7 +503,10 @@ function PortalShell() {
             ) : (
               <button
                 type="button"
-                onClick={() => setView('login')}
+                onClick={() => {
+                  setPostLoginView('admin');
+                  setView('login');
+                }}
                 className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
               >
                 <LogIn className="w-3.5 h-3.5" />
@@ -475,12 +521,14 @@ function PortalShell() {
           {effectiveView === 'change_password' && user ? (
             <ChangePasswordView
               forced={Boolean(user.mustChangePassword)}
-              onSuccess={() => setView('admin')}
+              onSuccess={() => setView(postLoginView)}
               onCancel={user.mustChangePassword ? undefined : () => setView('admin')}
               onToast={addToast}
             />
           ) : effectiveView === 'login' ? (
             <LoginView onCancel={() => setView('portal')} />
+          ) : effectiveView === 'leads' && user && isAdmin ? (
+            <LeadManageView settings={settings} onToast={addToast} />
           ) : effectiveView === 'admin' && user && isAdmin ? (
             <AdminPanel
               user={user}

@@ -34,11 +34,21 @@ export function getSessionToken(): string | null {
 export class ApiError extends Error {
   status: number;
   mustChangePassword?: boolean;
+  requiresUnlock?: boolean;
+  targetUserId?: number;
 
-  constructor(message: string, status: number, mustChangePassword?: boolean) {
+  constructor(
+    message: string,
+    status: number,
+    mustChangePassword?: boolean,
+    requiresUnlock?: boolean,
+    targetUserId?: number
+  ) {
     super(message);
     this.status = status;
     this.mustChangePassword = mustChangePassword;
+    this.requiresUnlock = requiresUnlock;
+    this.targetUserId = targetUserId;
   }
 }
 
@@ -70,10 +80,14 @@ export async function apiFetch<T>(
   if (!response.ok) {
     let errorMessage = `Request failed (${response.status})`;
     let mustChangePassword: boolean | undefined;
+    let requiresUnlock: boolean | undefined;
+    let targetUserId: number | undefined;
     try {
       const errBody = (await response.json()) as {
         error?: string;
         mustChangePassword?: boolean;
+        requiresUnlock?: boolean;
+        targetUserId?: number;
       };
       if (errBody?.error) {
         errorMessage = errBody.error;
@@ -81,10 +95,22 @@ export async function apiFetch<T>(
       if (typeof errBody?.mustChangePassword === 'boolean') {
         mustChangePassword = errBody.mustChangePassword;
       }
+      if (typeof errBody?.requiresUnlock === 'boolean') {
+        requiresUnlock = errBody.requiresUnlock;
+      }
+      if (typeof errBody?.targetUserId === 'number') {
+        targetUserId = errBody.targetUserId;
+      }
     } catch {
       // Ignore JSON parse error
     }
-    throw new ApiError(errorMessage, response.status, mustChangePassword);
+    throw new ApiError(
+      errorMessage,
+      response.status,
+      mustChangePassword,
+      requiresUnlock,
+      targetUserId
+    );
   }
 
   return (await response.json()) as T;
