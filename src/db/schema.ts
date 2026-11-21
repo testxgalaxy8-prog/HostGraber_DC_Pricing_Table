@@ -39,6 +39,7 @@ export const settings = pgTable('settings', {
   companyName: text('company_name').notNull().default('HostGraber'),
   companyWebsite: text('company_website').notNull().default('https://hostgraber.com/'),
   logoUrl: text('logo_url'),
+  pdfLogoUrl: text('pdf_logo_url'),
   logoShowCompanyName: boolean('logo_show_company_name').notNull().default(true),
   currencyCode: text('currency_code').notNull().default('INR'),
   currencySymbol: text('currency_symbol').notNull().default('₹'),

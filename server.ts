@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import * as XLSX from 'xlsx';
 import { asc, desc, eq, or } from 'drizzle-orm';
@@ -499,6 +500,90 @@ app.put(
 );
 
 // Logo Management
+app.get('/api/public/logo-asset', async (req, res) => {
+  try {
+    const target = req.query.target === 'pdf' ? 'pdf' : 'brand';
+    const current = await getOrInitSettings();
+    const rawUrl =
+      target === 'pdf' ? current.pdfLogoUrl || current.logoUrl : current.logoUrl;
+
+    if (!rawUrl) {
+      res.status(404).end();
+      return;
+    }
+
+    if (rawUrl.startsWith('data:')) {
+      const match = /^data:(image\/[a-zA-Z0-9+.-]+);base64,([A-Za-z0-9+/=]+)$/i.exec(
+        rawUrl
+      );
+      if (!match) {
+        res.status(400).end();
+        return;
+      }
+      const mime = match[1];
+      const buffer = Buffer.from(match[2], 'base64');
+      res.setHeader('Content-Type', mime);
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(buffer);
+      return;
+    }
+
+    if (rawUrl.startsWith('/')) {
+      const publicRoot = path.resolve(import.meta.dirname, 'public');
+      const resolved = path.resolve(publicRoot, `.${rawUrl}`);
+      if (!resolved.startsWith(publicRoot) || !fs.existsSync(resolved)) {
+        res.status(404).end();
+        return;
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      res.sendFile(resolved);
+      return;
+    }
+
+    const parsed = new URL(rawUrl);
+    const host = parsed.hostname.toLowerCase();
+    if (
+      (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') ||
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '0.0.0.0' ||
+      host === '::1' ||
+      host === '[::1]' ||
+      host.startsWith('10.') ||
+      host.startsWith('192.168.') ||
+      host.startsWith('169.254.') ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    ) {
+      res.status(400).end();
+      return;
+    }
+
+    const upstream = await fetch(parsed.toString(), {
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!upstream.ok) {
+      res.status(502).end();
+      return;
+    }
+    const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
+    if (!contentType.startsWith('image/')) {
+      res.status(400).end();
+      return;
+    }
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    if (buf.length > 2.5 * 1024 * 1024) {
+      res.status(413).end();
+      return;
+    }
+    res.setHeader('Content-Type', contentType.split(';')[0]);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(buf);
+  } catch (error) {
+    console.error('GET /api/public/logo-asset failed:', error);
+    res.status(500).end();
+  }
+});
+
 app.post(
   '/api/admin/logo/upload',
   requireAdminSession,
@@ -519,22 +604,38 @@ app.post(
 
       const dataUrl = `data:${mimeType};base64,${req.file.buffer.toString('base64')}`;
       const current = await getOrInitSettings();
-      const showCompanyNameRaw = (req.body as { logoShowCompanyName?: string | boolean })
-        ?.logoShowCompanyName;
-      const showCompanyName =
-        showCompanyNameRaw === undefined
-          ? current.logoShowCompanyName
-          : showCompanyNameRaw === true || showCompanyNameRaw === 'true';
+      const bodyObj = req.body as {
+        target?: string;
+        logoShowCompanyName?: string | boolean;
+      };
+      const target = bodyObj?.target === 'pdf' ? 'pdf' : 'brand';
 
-      await db
-        .update(settings)
-        .set({
-          logoUrl: dataUrl,
-          logoShowCompanyName: showCompanyName,
-          updatedBy: req.dbUser?.email || null,
-          updatedAt: new Date(),
-        })
-        .where(eq(settings.id, current.id));
+      if (target === 'pdf') {
+        await db
+          .update(settings)
+          .set({
+            pdfLogoUrl: dataUrl,
+            updatedBy: req.dbUser?.email || null,
+            updatedAt: new Date(),
+          })
+          .where(eq(settings.id, current.id));
+      } else {
+        const showCompanyNameRaw = bodyObj?.logoShowCompanyName;
+        const showCompanyName =
+          showCompanyNameRaw === undefined
+            ? current.logoShowCompanyName
+            : showCompanyNameRaw === true || showCompanyNameRaw === 'true';
+
+        await db
+          .update(settings)
+          .set({
+            logoUrl: dataUrl,
+            logoShowCompanyName: showCompanyName,
+            updatedBy: req.dbUser?.email || null,
+            updatedAt: new Date(),
+          })
+          .where(eq(settings.id, current.id));
+      }
 
       const refreshed = await getOrInitSettings();
       res.json(refreshed);
@@ -555,12 +656,18 @@ app.put(
     try {
       const current = await getOrInitSettings();
       const body = req.body as {
+        target?: 'brand' | 'pdf';
         logoUrl?: string | null;
+        pdfLogoUrl?: string | null;
         logoShowCompanyName?: boolean;
       };
 
       const nextLogoUrl =
         body.logoUrl !== undefined ? validateLogoUrl(body.logoUrl) : current.logoUrl;
+      const nextPdfLogoUrl =
+        body.pdfLogoUrl !== undefined
+          ? validateLogoUrl(body.pdfLogoUrl)
+          : current.pdfLogoUrl;
       const nextShowName =
         typeof body.logoShowCompanyName === 'boolean'
           ? body.logoShowCompanyName
@@ -570,6 +677,7 @@ app.put(
         .update(settings)
         .set({
           logoUrl: nextLogoUrl,
+          pdfLogoUrl: nextPdfLogoUrl,
           logoShowCompanyName: nextShowName,
           updatedBy: req.dbUser?.email || null,
           updatedAt: new Date(),
@@ -594,15 +702,32 @@ app.delete(
   async (req: AuthRequest, res) => {
     try {
       const current = await getOrInitSettings();
-      await db
-        .update(settings)
-        .set({
-          logoUrl: null,
-          logoShowCompanyName: true,
-          updatedBy: req.dbUser?.email || null,
-          updatedAt: new Date(),
-        })
-        .where(eq(settings.id, current.id));
+      const target =
+        req.query.target === 'pdf' ||
+        (req.body as { target?: string } | undefined)?.target === 'pdf'
+          ? 'pdf'
+          : 'brand';
+
+      if (target === 'pdf') {
+        await db
+          .update(settings)
+          .set({
+            pdfLogoUrl: null,
+            updatedBy: req.dbUser?.email || null,
+            updatedAt: new Date(),
+          })
+          .where(eq(settings.id, current.id));
+      } else {
+        await db
+          .update(settings)
+          .set({
+            logoUrl: null,
+            logoShowCompanyName: true,
+            updatedBy: req.dbUser?.email || null,
+            updatedAt: new Date(),
+          })
+          .where(eq(settings.id, current.id));
+      }
 
       const refreshed = await getOrInitSettings();
       res.json(refreshed);

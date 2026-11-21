@@ -136,6 +136,16 @@ export interface ResolvedPricingBreakdown {
   taxRate: number;
 }
 
+export interface ResolvedCycleDiscount {
+  hasDiscount: boolean;
+  regularPrice: number | null;
+  discountPercentage: number | null;
+  discountedPrice: number | null;
+  taxBasis: 'before_tax' | 'inclusive_of_tax';
+  taxLabel: string;
+  isMonthlyUnit: boolean;
+}
+
 export function resolvePricingBreakdown(
   item: PlanPricingItem | undefined,
   cycle: BillingCycle,
@@ -159,12 +169,12 @@ export function resolvePricingBreakdown(
     };
   }
 
+  // Always keep monthlyRate as the per-month base rate (currentPrice), never
+  // letting a term-level discounted total overwrite the /mo column.
   let monthlyRate =
-    item.discountedPrice !== null && item.discountedPrice !== undefined && item.discountedPrice > 0
-      ? item.discountedPrice
-      : item.currentPrice !== null && item.currentPrice !== undefined && item.currentPrice > 0
-        ? item.currentPrice
-        : null;
+    item.currentPrice !== null && item.currentPrice !== undefined && item.currentPrice > 0
+      ? item.currentPrice
+      : null;
 
   let termTotal =
     item.totalPrice !== null && item.totalPrice !== undefined && item.totalPrice > 0
@@ -178,14 +188,9 @@ export function resolvePricingBreakdown(
       ? item.gstInclusiveTotal
       : null;
 
-  // If monthlyRate is absent and both termTotal & gstTotal are present in before_tax mode,
+  // If monthlyRate is absent and both termTotal & gstTotal are present,
   // guard against a shifted/corrupted totalPrice that disagrees with gstTotal (e.g. >5% off).
-  if (
-    monthlyRate === null &&
-    termTotal !== null &&
-    gstTotal !== null &&
-    taxMode === 'before_tax'
-  ) {
+  if (monthlyRate === null && termTotal !== null && gstTotal !== null) {
     const expectedBeforeTax = roundCurrency(gstTotal / taxMultiplier);
     if (
       expectedBeforeTax > 0 &&
@@ -197,12 +202,7 @@ export function resolvePricingBreakdown(
 
   // Similarly, if monthlyRate IS present and matches gstTotal/taxMultiplier while termTotal disagrees,
   // align termTotal with monthlyRate * months.
-  if (
-    monthlyRate !== null &&
-    termTotal !== null &&
-    gstTotal !== null &&
-    taxMode === 'before_tax'
-  ) {
+  if (monthlyRate !== null && termTotal !== null && gstTotal !== null) {
     const expectedFromRate = roundCurrency(monthlyRate * months);
     const expectedFromGst = roundCurrency(gstTotal / taxMultiplier);
     if (
@@ -218,10 +218,13 @@ export function resolvePricingBreakdown(
     if (monthlyRate !== null) {
       termTotal = roundCurrency(monthlyRate * months);
     } else if (gstTotal !== null) {
-      termTotal =
-        taxMode === 'inclusive_of_tax'
-          ? gstTotal
-          : roundCurrency(gstTotal / taxMultiplier);
+      termTotal = roundCurrency(gstTotal / taxMultiplier);
+    } else if (
+      item.discountedPrice !== null &&
+      item.discountedPrice !== undefined &&
+      item.discountedPrice > 0
+    ) {
+      termTotal = roundCurrency(item.discountedPrice * months);
     }
   }
 
@@ -230,10 +233,7 @@ export function resolvePricingBreakdown(
   }
 
   if (gstTotal === null && termTotal !== null) {
-    gstTotal =
-      taxMode === 'inclusive_of_tax'
-        ? termTotal
-        : roundCurrency(termTotal * taxMultiplier);
+    gstTotal = roundCurrency(termTotal * taxMultiplier);
   }
 
   return {
@@ -243,6 +243,178 @@ export function resolvePricingBreakdown(
     taxMode,
     taxText,
     taxRate,
+  };
+}
+
+export function resolveCycleDiscount(
+  item: PlanPricingItem | undefined,
+  cycle: BillingCycle,
+  plan: HostingPlanFull,
+  settings: PortalSettings,
+  existingBreakdown?: ResolvedPricingBreakdown
+): ResolvedCycleDiscount {
+  const bd = existingBreakdown ?? resolvePricingBreakdown(item, cycle, plan, settings);
+  if (!item) {
+    return {
+      hasDiscount: false,
+      regularPrice: null,
+      discountPercentage: null,
+      discountedPrice: null,
+      taxBasis: bd.taxMode,
+      taxLabel: bd.taxText,
+      isMonthlyUnit: false,
+    };
+  }
+
+  const months = CYCLE_META[cycle].months;
+  const pctInput =
+    item.discountPercentage !== null && item.discountPercentage > 0
+      ? item.discountPercentage
+      : null;
+  const origInput =
+    item.originalPrice !== null && item.originalPrice > 0 ? item.originalPrice : null;
+  const discInput =
+    item.discountedPrice !== null && item.discountedPrice > 0
+      ? item.discountedPrice
+      : null;
+  const offerInput =
+    item.specialOfferPrice !== null && item.specialOfferPrice > 0
+      ? item.specialOfferPrice
+      : null;
+
+  if (!pctInput && !origInput && !discInput && !offerInput) {
+    return {
+      hasDiscount: false,
+      regularPrice: null,
+      discountPercentage: null,
+      discountedPrice: null,
+      taxBasis: bd.taxMode,
+      taxLabel: bd.taxText,
+      isMonthlyUnit: false,
+    };
+  }
+
+  let regularPrice: number | null = origInput;
+  if (regularPrice === null) {
+    if (discInput !== null) {
+      if (
+        months > 1 &&
+        bd.monthlyRate !== null &&
+        discInput <= bd.monthlyRate * 1.15 &&
+        (bd.termTotal === null || discInput < bd.termTotal * 0.5)
+      ) {
+        regularPrice = bd.monthlyRate;
+      } else if (
+        bd.gstTotal !== null &&
+        (bd.taxMode === 'inclusive_of_tax' ||
+          (bd.termTotal !== null && discInput > bd.termTotal * 0.98))
+      ) {
+        regularPrice = bd.gstTotal;
+      } else {
+        regularPrice =
+          bd.taxMode === 'inclusive_of_tax'
+            ? (bd.gstTotal ?? bd.termTotal ?? bd.monthlyRate)
+            : (bd.termTotal ?? bd.monthlyRate);
+      }
+    } else if (offerInput !== null) {
+      if (months > 1 && bd.monthlyRate !== null && offerInput < bd.monthlyRate) {
+        regularPrice = bd.monthlyRate;
+      } else {
+        regularPrice =
+          bd.taxMode === 'inclusive_of_tax'
+            ? (bd.gstTotal ?? bd.termTotal ?? bd.monthlyRate)
+            : (bd.termTotal ?? bd.monthlyRate);
+      }
+    } else {
+      regularPrice =
+        bd.taxMode === 'inclusive_of_tax'
+          ? (bd.gstTotal ?? bd.termTotal ?? bd.monthlyRate)
+          : (bd.termTotal ?? bd.monthlyRate);
+    }
+  }
+
+  let discountedPrice: number | null = null;
+  if (discInput !== null) {
+    discountedPrice = discInput;
+  } else if (
+    offerInput !== null &&
+    regularPrice !== null &&
+    offerInput < regularPrice
+  ) {
+    discountedPrice = offerInput;
+  } else if (pctInput !== null && regularPrice !== null && regularPrice > 0) {
+    discountedPrice = roundCurrency(regularPrice * (1 - pctInput / 100));
+  } else if (origInput !== null) {
+    if (
+      bd.monthlyRate !== null &&
+      months > 1 &&
+      origInput <= bd.monthlyRate * 1.5 &&
+      bd.monthlyRate < origInput
+    ) {
+      discountedPrice = bd.monthlyRate;
+    } else if (
+      bd.taxMode === 'inclusive_of_tax' &&
+      bd.gstTotal !== null &&
+      bd.gstTotal < origInput
+    ) {
+      discountedPrice = bd.gstTotal;
+    } else if (bd.termTotal !== null && bd.termTotal < origInput) {
+      discountedPrice = bd.termTotal;
+    } else if (bd.monthlyRate !== null && bd.monthlyRate < origInput) {
+      discountedPrice = bd.monthlyRate;
+    }
+  }
+
+  const discountPercentage =
+    pctInput ??
+    (regularPrice !== null &&
+    discountedPrice !== null &&
+    regularPrice > 0 &&
+    discountedPrice < regularPrice
+      ? roundCurrency(((regularPrice - discountedPrice) / regularPrice) * 100)
+      : null);
+
+  const hasDiscount = Boolean(
+    (discountPercentage !== null && discountPercentage > 0) ||
+      (discountedPrice !== null &&
+        regularPrice !== null &&
+        regularPrice > 0 &&
+        discountedPrice < regularPrice)
+  );
+
+  let taxBasis: 'before_tax' | 'inclusive_of_tax' = bd.taxMode;
+  if (
+    bd.gstTotal !== null &&
+    regularPrice !== null &&
+    regularPrice > 0 &&
+    Math.abs(regularPrice - bd.gstTotal) / bd.gstTotal <= 0.02
+  ) {
+    taxBasis = 'inclusive_of_tax';
+  } else if (
+    bd.termTotal !== null &&
+    regularPrice !== null &&
+    regularPrice > 0 &&
+    Math.abs(regularPrice - bd.termTotal) / bd.termTotal <= 0.02
+  ) {
+    taxBasis = 'before_tax';
+  }
+
+  const taxLabel = taxBasis === 'inclusive_of_tax' ? 'inclusive of tax' : 'before tax';
+  const isMonthlyUnit = Boolean(
+    bd.monthlyRate !== null &&
+      regularPrice !== null &&
+      months > 1 &&
+      regularPrice <= bd.monthlyRate * 1.25
+  );
+
+  return {
+    hasDiscount,
+    regularPrice,
+    discountPercentage,
+    discountedPrice,
+    taxBasis,
+    taxLabel,
+    isMonthlyUnit,
   };
 }
 
@@ -386,30 +558,25 @@ export function generateQuotationText(
       for (const item of sortedPricing) {
         const cycle = normalizeBillingCycle(item.billingCycle);
         const meta = CYCLE_META[cycle];
-        const baseRate = item.currentPrice ?? 0;
-        const regularPrice = item.originalPrice ?? baseRate;
-        const finalDiscounted =
-          item.discountedPrice ??
-          (item.specialOfferPrice !== null && item.specialOfferPrice < regularPrice
-            ? item.specialOfferPrice
-            : baseRate > 0 && baseRate < regularPrice
-              ? baseRate
-              : null);
+        const breakdown = resolvePricingBreakdown(item, cycle, plan, settings);
+        const discount = resolveCycleDiscount(item, cycle, plan, settings, breakdown);
 
-        const hasDiscount =
-          (item.discountPercentage !== null && item.discountPercentage > 0) ||
-          (finalDiscounted !== null && finalDiscounted < regularPrice);
-
-        if (hasDiscount) {
+        if (discount.hasDiscount && discount.regularPrice !== null) {
+          const unitSuffix = discount.isMonthlyUnit ? '/mo' : '';
           lines.push('');
           lines.push(`Special ${meta.title} Offer:`);
-          lines.push(`Original Price: ${formatCurrencyValue(regularPrice, symbol, code)}`);
-          if (item.discountPercentage !== null && item.discountPercentage > 0) {
-            lines.push(`Discount: ${item.discountPercentage}%`);
+          lines.push(
+            `Original Price: ${formatCurrencyValue(discount.regularPrice, symbol, code)}${unitSuffix}`
+          );
+          if (
+            discount.discountPercentage !== null &&
+            discount.discountPercentage > 0
+          ) {
+            lines.push(`Discount: ${discount.discountPercentage}%`);
           }
-          if (finalDiscounted !== null) {
+          if (discount.discountedPrice !== null) {
             lines.push(
-              `Discounted Price: ${formatCurrencyValue(finalDiscounted, symbol, code)}`
+              `Discounted Price: ${formatCurrencyValue(discount.discountedPrice, symbol, code)}${unitSuffix} (${discount.taxLabel})`
             );
           }
         }

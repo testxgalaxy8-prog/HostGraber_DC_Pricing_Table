@@ -485,11 +485,11 @@ export function ManagePlansView({
                   const t = plan.pricing.find((p) => p.billingCycle === 'triennially');
 
                   const mVal =
-                    m?.discountedPrice ?? m?.currentPrice ?? m?.totalPrice ?? null;
+                    m?.currentPrice ?? m?.discountedPrice ?? m?.totalPrice ?? null;
                   const aVal =
-                    a?.discountedPrice ?? a?.currentPrice ?? a?.totalPrice ?? null;
+                    a?.currentPrice ?? a?.discountedPrice ?? a?.totalPrice ?? null;
                   const tVal =
-                    t?.discountedPrice ?? t?.currentPrice ?? t?.totalPrice ?? null;
+                    t?.currentPrice ?? t?.discountedPrice ?? t?.totalPrice ?? null;
                   const isSelected = selectedIdSet.has(plan.id);
 
                   return (

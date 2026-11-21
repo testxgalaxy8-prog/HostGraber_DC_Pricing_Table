@@ -20,6 +20,7 @@ import {
   generateQuotationText,
   getPricingItem,
   hasPricingValue,
+  resolveCycleDiscount,
   resolvePricingBreakdown,
   type QuotationCopyMode,
 } from '../shared/quotation.ts';
@@ -335,19 +336,7 @@ export function PlanDetailsView({
                 }
 
                 const breakdown = resolvePricingBreakdown(p, cycle, plan, settings);
-                const regularPrice = p.originalPrice ?? p.currentPrice ?? 0;
-                const effectiveDiscounted =
-                  p.discountedPrice ??
-                  (p.specialOfferPrice !== null && p.specialOfferPrice < regularPrice
-                    ? p.specialOfferPrice
-                    : p.currentPrice !== null && p.currentPrice < regularPrice
-                      ? p.currentPrice
-                      : null);
-                const hasDiscount =
-                  (p.discountPercentage !== null && p.discountPercentage > 0) ||
-                  (effectiveDiscounted !== null &&
-                    regularPrice > 0 &&
-                    effectiveDiscounted < regularPrice);
+                const discount = resolveCycleDiscount(p, cycle, plan, settings, breakdown);
 
                 return (
                   <div
@@ -395,19 +384,34 @@ export function PlanDetailsView({
                         </span>
                       </div>
                     )}
-                    {hasDiscount && regularPrice > 0 && (
-                      <div className="pt-1 text-xs font-mono-tabular text-[#64748B]">
-                        <span className="line-through">
-                          {formatCurrencyValue(
-                            regularPrice,
-                            settings.currencySymbol,
-                            settings.currencyCode
-                          )}
-                        </span>
-                        {p.discountPercentage !== null && p.discountPercentage > 0 && (
-                          <span className="ml-2 text-[#059669] font-semibold">
-                            -{p.discountPercentage}%
+                    {discount.hasDiscount && discount.regularPrice !== null && (
+                      <div className="pt-1.5 mt-1 border-t border-[#E2E8F0] text-xs font-mono-tabular text-[#64748B] space-y-0.5">
+                        <div>
+                          <span className="line-through">
+                            {formatCurrencyValue(
+                              discount.regularPrice,
+                              settings.currencySymbol,
+                              settings.currencyCode
+                            )}
+                            {discount.isMonthlyUnit ? '/mo' : ''}
                           </span>
+                          {discount.discountPercentage !== null &&
+                            discount.discountPercentage > 0 && (
+                              <span className="ml-2 text-[#059669] font-semibold">
+                                -{discount.discountPercentage}%
+                              </span>
+                            )}
+                        </div>
+                        {discount.discountedPrice !== null && (
+                          <div className="text-[#059669] font-semibold">
+                            Offer:{' '}
+                            {formatCurrencyValue(
+                              discount.discountedPrice,
+                              settings.currencySymbol,
+                              settings.currencyCode
+                            )}
+                            {discount.isMonthlyUnit ? '/mo' : ''}
+                          </div>
                         )}
                       </div>
                     )}

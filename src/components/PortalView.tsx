@@ -25,6 +25,7 @@ import {
   getPricingItem,
   hasPricingValue,
   normalizeBillingCycle,
+  resolveCycleDiscount,
   resolvePricingBreakdown,
 } from '../shared/quotation.ts';
 import type {
@@ -109,13 +110,10 @@ export function PortalView({
       }
 
       if (discountOnly) {
-        const hasDiscount = plan.pricing.some(
-          (p) =>
-            (p.discountPercentage !== null && p.discountPercentage > 0) ||
-            (p.discountedPrice !== null &&
-              p.currentPrice !== null &&
-              p.discountedPrice < (p.originalPrice ?? p.currentPrice))
-        );
+        const hasDiscount = plan.pricing.some((p) => {
+          const cycle = normalizeBillingCycle(p.billingCycle);
+          return resolveCycleDiscount(p, cycle, plan, settings).hasDiscount;
+        });
         if (!hasDiscount) return false;
       }
 

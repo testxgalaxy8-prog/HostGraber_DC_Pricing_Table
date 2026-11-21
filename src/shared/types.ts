@@ -35,6 +35,7 @@ export interface PortalSettings {
   companyName: string;
   companyWebsite: string;
   logoUrl: string | null;
+  pdfLogoUrl: string | null;
   logoShowCompanyName: boolean;
   currencyCode: string;
   currencySymbol: string;

@@ -43,6 +43,7 @@ const DEFAULT_SETTINGS: PortalSettings = {
   companyName: 'HostGraber',
   companyWebsite: 'https://hostgraber.com/',
   logoUrl: null,
+  pdfLogoUrl: null,
   logoShowCompanyName: true,
   currencyCode: 'INR',
   currencySymbol: '₹',

@@ -331,9 +331,9 @@ export function AdminDashboard({
                   const m = plan.pricing.find((p) => p.billingCycle === 'monthly');
                   const a = plan.pricing.find((p) => p.billingCycle === 'annually');
                   const mVal =
-                    m?.discountedPrice ?? m?.currentPrice ?? m?.totalPrice ?? null;
+                    m?.currentPrice ?? m?.discountedPrice ?? m?.totalPrice ?? null;
                   const aVal =
-                    a?.discountedPrice ?? a?.currentPrice ?? a?.totalPrice ?? null;
+                    a?.currentPrice ?? a?.discountedPrice ?? a?.totalPrice ?? null;
                   return (
                     <tr key={plan.id} className="hover:bg-[#F8FAFC] transition-colors">
                       <td className="py-3 px-5 font-semibold text-[#0F172A]">

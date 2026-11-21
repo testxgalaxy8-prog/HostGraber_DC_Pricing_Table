@@ -7,6 +7,7 @@ import {
   formatTenureSelectionLabel,
   getPricingItem,
   hasPricingValue,
+  resolveCycleDiscount,
   resolvePricingBreakdown,
   resolveTargetCycles,
   type TenureSelection,
@@ -53,18 +54,30 @@ async function loadDejaVuFonts(): Promise<{ regular: string; bold: string } | nu
 }
 
 async function rasterizeLogoToPng(
-  logoUrl: string | null | undefined
+  logoUrl: string | null | undefined,
+  target: 'pdf' | 'brand' = 'pdf'
 ): Promise<{ dataUrl: string; width: number; height: number } | null> {
   if (!logoUrl) return null;
+  let objectUrlToRevoke: string | null = null;
   try {
+    let imgSrc = logoUrl;
+    if (!logoUrl.startsWith('data:')) {
+      // Fetch remote/relative logos through our same-origin endpoint so CORS
+      // restrictions never block rasterizing the admin logo onto a PDF canvas.
+      const res = await fetch(`/api/public/logo-asset?target=${target}`, {
+        cache: 'no-store',
+      });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      objectUrlToRevoke = URL.createObjectURL(blob);
+      imgSrc = objectUrlToRevoke;
+    }
+
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
       const el = new Image();
-      if (!logoUrl.startsWith('data:')) {
-        el.crossOrigin = 'anonymous';
-      }
       el.onload = () => resolve(el);
       el.onerror = () => reject(new Error('Logo image load error'));
-      el.src = logoUrl;
+      el.src = imgSrc;
     });
 
     const naturalW = img.naturalWidth || 160;
@@ -86,6 +99,10 @@ async function rasterizeLogoToPng(
     };
   } catch {
     return null;
+  } finally {
+    if (objectUrlToRevoke) {
+      URL.revokeObjectURL(objectUrlToRevoke);
+    }
   }
 }
 
@@ -178,6 +195,8 @@ export function exportPlansToCsv(
     headers.push(`${title} Monthly Rate (${settings.currencyCode})`);
     headers.push(`${title} Term Total (${settings.currencyCode})`);
     headers.push(`${title} Incl. GST (${settings.currencyCode})`);
+    headers.push(`${title} Discount %`);
+    headers.push(`${title} Discounted Price (${settings.currencyCode})`);
   }
 
   headers.push('Specifications', 'Special Offers', 'Short Description', 'Notes');
@@ -229,6 +248,7 @@ export function exportPlansToCsv(
     for (const cycle of targetCycles) {
       const entry = getPricingItem(plan.pricing, cycle);
       const breakdown = resolvePricingBreakdown(entry, cycle, plan, settings);
+      const discount = resolveCycleDiscount(entry, cycle, plan, settings, breakdown);
 
       row.push(
         breakdown.monthlyRate !== null && breakdown.monthlyRate > 0
@@ -243,6 +263,16 @@ export function exportPlansToCsv(
       row.push(
         breakdown.gstTotal !== null && breakdown.gstTotal > 0
           ? String(breakdown.gstTotal)
+          : ''
+      );
+      row.push(
+        discount.hasDiscount && discount.discountPercentage !== null
+          ? String(discount.discountPercentage)
+          : ''
+      );
+      row.push(
+        discount.hasDiscount && discount.discountedPrice !== null
+          ? String(discount.discountedPrice)
           : ''
       );
     }
@@ -290,9 +320,10 @@ export async function exportPlansToPdf(
     format: 'a4',
   });
 
+  const effectivePdfLogoUrl = settings.pdfLogoUrl || settings.logoUrl;
   const [fonts, logoAsset] = await Promise.all([
     loadDejaVuFonts(),
-    rasterizeLogoToPng(settings.logoUrl),
+    rasterizeLogoToPng(effectivePdfLogoUrl, 'pdf'),
   ]);
 
   let fontFamily = 'helvetica';
@@ -323,22 +354,47 @@ export async function exportPlansToPdf(
   doc.setFillColor(23, 201, 100); // #17C964 emerald accent strip
   doc.rect(0, 74, pageWidth, 3, 'F');
 
+  const companyName = settings.companyName || 'HostGraber';
   let titleStartX = marginX;
+  const showWordmarkText = !logoAsset || settings.logoShowCompanyName;
+
   if (logoAsset) {
     const maxLogoH = 34;
-    const maxLogoW = 110;
+    const maxLogoW = 115;
     const ratio = Math.min(maxLogoW / logoAsset.width, maxLogoH / logoAsset.height);
     const drawW = logoAsset.width * ratio;
     const drawH = logoAsset.height * ratio;
-    doc.addImage(logoAsset.dataUrl, 'PNG', marginX, 20 + (maxLogoH - drawH) / 2, drawW, drawH);
+    doc.addImage(
+      logoAsset.dataUrl,
+      'PNG',
+      marginX,
+      20 + (maxLogoH - drawH) / 2,
+      drawW,
+      drawH
+    );
     titleStartX = marginX + drawW + 12;
+  } else {
+    // Draw default HG emerald monogram badge
+    const initials =
+      companyName
+        .split(/\s+/)
+        .map((w) => w[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase() || 'HG';
+    doc.setFillColor(23, 201, 100);
+    doc.roundedRect(marginX, 20, 34, 34, 6, 6, 'F');
+    doc.setFont(fontFamily, 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(4, 18, 10);
+    doc.text(initials, marginX + 17, 42, { align: 'center' });
+    titleStartX = marginX + 46;
   }
 
-  const companyName = settings.companyName || 'HostGraber';
-  doc.setFont(fontFamily, 'bold');
-  doc.setFontSize(16);
-  doc.setTextColor(255, 255, 255);
-  if (!logoAsset || settings.logoShowCompanyName) {
+  if (showWordmarkText) {
+    doc.setFont(fontFamily, 'bold');
+    doc.setFontSize(16);
+    doc.setTextColor(255, 255, 255);
     doc.text(companyName, titleStartX, 34);
   }
 
@@ -347,8 +403,8 @@ export async function exportPlansToPdf(
   doc.setTextColor(148, 163, 184);
   doc.text(
     settings.companyWebsite || 'Pricing Quotation',
-    !logoAsset || settings.logoShowCompanyName ? titleStartX : marginX + 0,
-    !logoAsset || settings.logoShowCompanyName ? 50 : 62
+    titleStartX,
+    showWordmarkText ? 50 : 41
   );
 
   // Right-aligned Quote Metadata
@@ -415,6 +471,7 @@ export async function exportPlansToPdf(
     cursorY += 14;
 
     // Billing Tenures Table
+    const discountRows: string[][] = [];
     const pricingRows = targetCycles.map((cycle) => {
       const item = getPricingItem(plan.pricing, cycle);
       const meta = CYCLE_META[cycle];
@@ -422,6 +479,38 @@ export async function exportPlansToPdf(
         return [meta.title, meta.durationLabel, '—', '—', '—', '—'];
       }
       const breakdown = resolvePricingBreakdown(item, cycle, plan, settings);
+      const discount = resolveCycleDiscount(item, cycle, plan, settings, breakdown);
+
+      let discountSummary = '—';
+      if (discount.hasDiscount && discount.regularPrice !== null) {
+        const unit = discount.isMonthlyUnit ? '/mo' : '';
+        if (discount.discountedPrice !== null && discount.discountPercentage) {
+          discountSummary = `${discount.discountPercentage}% off (${formatMoney(
+            discount.discountedPrice,
+            settings,
+            unicodeSafe
+          )}${unit})`;
+        } else if (discount.discountPercentage) {
+          discountSummary = `${discount.discountPercentage}% off`;
+        } else if (discount.discountedPrice !== null) {
+          discountSummary = `${formatMoney(
+            discount.discountedPrice,
+            settings,
+            unicodeSafe
+          )}${unit}`;
+        }
+
+        discountRows.push([
+          `${meta.title} (${meta.durationLabel})`,
+          `${formatMoney(discount.regularPrice, settings, unicodeSafe)}${unit}`,
+          discount.discountPercentage ? `${discount.discountPercentage}%` : '—',
+          discount.discountedPrice !== null
+            ? `${formatMoney(discount.discountedPrice, settings, unicodeSafe)}${unit}`
+            : '—',
+          discount.taxBasis === 'inclusive_of_tax' ? 'Inclusive of tax' : 'Before tax',
+        ]);
+      }
+
       return [
         meta.title,
         meta.durationLabel,
@@ -430,7 +519,7 @@ export async function exportPlansToPdf(
           : '—',
         formatMoney(breakdown.termTotal, settings, unicodeSafe),
         formatMoney(breakdown.gstTotal, settings, unicodeSafe),
-        resolveTaxDisplayLabel(item, plan, settings),
+        discountSummary,
       ];
     });
 
@@ -444,12 +533,19 @@ export async function exportPlansToPdf(
       startY: cursorY,
       margin: { left: marginX, right: marginX },
       head: [
-        ['Billing Cycle', 'Duration', 'Monthly Rate', 'Term Total', 'Incl. GST', 'Tax Mode'],
+        [
+          'Billing Cycle',
+          'Duration',
+          'Monthly Rate',
+          'Term Total (Excl. Tax)',
+          'Incl. GST',
+          'Special Discount',
+        ],
       ],
       body: pricingRows,
       styles: {
         font: fontFamily,
-        fontSize: 9,
+        fontSize: 8.5,
         cellPadding: 6,
         textColor: [15, 23, 42],
         lineColor: [226, 232, 240],
@@ -464,10 +560,62 @@ export async function exportPlansToPdf(
         2: { halign: 'right' },
         3: { halign: 'right' },
         4: { halign: 'right' },
+        5: { halign: 'right' },
       },
     });
 
-    cursorY = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? cursorY) + 20;
+    cursorY =
+      ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable
+        ?.finalY ?? cursorY) + 18;
+
+    if (discountRows.length > 0) {
+      if (cursorY > pageHeight - 120) {
+        doc.addPage();
+        cursorY = 42;
+      }
+      doc.setFont(fontFamily, 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(5, 150, 105);
+      doc.text('Special Tenure Offers & Discounts', marginX, cursorY);
+      cursorY += 8;
+
+      autoTable(doc, {
+        startY: cursorY,
+        margin: { left: marginX, right: marginX },
+        head: [
+          [
+            'Billing Cycle',
+            'Original Price',
+            'Discount',
+            'Discounted Price',
+            'Tax Basis',
+          ],
+        ],
+        body: discountRows,
+        styles: {
+          font: fontFamily,
+          fontSize: 8.5,
+          cellPadding: 6,
+          textColor: [15, 23, 42],
+          lineColor: [226, 232, 240],
+          lineWidth: 0.5,
+        },
+        headStyles: {
+          fillColor: [236, 253, 245],
+          textColor: [6, 95, 70],
+          fontStyle: 'bold',
+        },
+        columnStyles: {
+          1: { halign: 'right' },
+          2: { halign: 'right', fontStyle: 'bold' },
+          3: { halign: 'right', fontStyle: 'bold', textColor: [5, 150, 105] },
+        },
+      });
+
+      cursorY =
+        ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable
+          ?.finalY ?? cursorY) + 20;
+    }
 
     // Technical Specifications Table
     const hasPlanSeries = Boolean(plan.series && plan.series.trim());
@@ -608,6 +756,25 @@ export async function exportPlansToPdf(
 
       const entry = getPricingItem(plan.pricing, selectedCycle);
       const breakdown = resolvePricingBreakdown(entry, selectedCycle, plan, settings);
+      const discount = resolveCycleDiscount(
+        entry,
+        selectedCycle,
+        plan,
+        settings,
+        breakdown
+      );
+      const unit = discount.isMonthlyUnit ? '/mo' : '';
+      const discountCell = discount.hasDiscount
+        ? [
+            discount.discountPercentage ? `${discount.discountPercentage}% off` : 'Offer',
+            discount.discountedPrice !== null
+              ? `${formatMoney(discount.discountedPrice, settings, unicodeSafe)}${unit}`
+              : '',
+          ]
+            .filter(Boolean)
+            .join('\n')
+        : '—';
+
       return [
         plan.series ? `${plan.name}\n(${plan.series})` : plan.name,
         plan.categoryName,
@@ -617,6 +784,7 @@ export async function exportPlansToPdf(
           : '—',
         formatMoney(breakdown.termTotal, settings, unicodeSafe),
         formatMoney(breakdown.gstTotal, settings, unicodeSafe),
+        discountCell,
       ];
     });
 
@@ -631,6 +799,7 @@ export async function exportPlansToPdf(
           `${meta.title} /mo`,
           `${meta.title} Total`,
           'Incl. GST',
+          'Discount',
         ],
       ],
       body: bodyRows,
@@ -649,11 +818,12 @@ export async function exportPlansToPdf(
         fontStyle: 'bold',
       },
       columnStyles: {
-        0: { cellWidth: 96, fontStyle: 'bold' },
-        1: { cellWidth: 80 },
+        0: { cellWidth: 88, fontStyle: 'bold' },
+        1: { cellWidth: 72 },
         3: { halign: 'right' },
         4: { halign: 'right' },
         5: { halign: 'right' },
+        6: { halign: 'right', textColor: [5, 150, 105] },
       },
     });
   } else {
@@ -678,6 +848,7 @@ export async function exportPlansToPdf(
         const entry = getPricingItem(plan.pricing, cycle);
         if (!hasPricingValue(entry) || !entry) return '—';
         const breakdown = resolvePricingBreakdown(entry, cycle, plan, settings);
+        const discount = resolveCycleDiscount(entry, cycle, plan, settings, breakdown);
         const parts: string[] = [];
         if (breakdown.monthlyRate !== null && breakdown.monthlyRate > 0) {
           parts.push(`${formatMoney(breakdown.monthlyRate, settings, unicodeSafe)}/mo`);
@@ -687,6 +858,18 @@ export async function exportPlansToPdf(
         }
         if (breakdown.gstTotal !== null && breakdown.gstTotal > 0) {
           parts.push(`GST: ${formatMoney(breakdown.gstTotal, settings, unicodeSafe)}`);
+        }
+        if (discount.hasDiscount) {
+          const pctLabel = discount.discountPercentage
+            ? `${discount.discountPercentage}% off`
+            : 'Offer';
+          const discAmt =
+            discount.discountedPrice !== null
+              ? `: ${formatMoney(discount.discountedPrice, settings, unicodeSafe)}${
+                  discount.isMonthlyUnit ? '/mo' : ''
+                }`
+              : '';
+          parts.push(`${pctLabel}${discAmt}`);
         }
         return parts.join('\n') || '—';
       });
