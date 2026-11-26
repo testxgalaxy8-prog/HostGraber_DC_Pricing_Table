@@ -446,6 +446,10 @@ const ACTION_LABELS: Record<string, { label: string; toneClass: string }> = {
     label: 'Bulk Delete',
     toneClass: 'bg-[#FEF2F2] text-[#B91C1C] border-[#FCA5A5]',
   },
+  transfer_lead: {
+    label: 'Transferred Lead',
+    toneClass: 'bg-[#ECFDF5] text-[#047857] border-[#6EE7B7]',
+  },
 };
 
 function formatAuditTimestamp(iso: string): string {
@@ -576,40 +580,42 @@ export function LeadAccessLogsModal({
           </button>
         </div>
 
-        <div className="px-5 py-3 border-b border-[#F1F5F9] bg-[#F8FAFC] flex flex-wrap items-center gap-2.5">
-          <div className="relative flex-1 min-w-[200px]">
+        <div className="px-4 sm:px-5 py-3 border-b border-[#F1F5F9] bg-[#F8FAFC] flex flex-col sm:flex-row sm:items-center gap-2.5">
+          <div className="relative flex-1 min-w-0">
             <Search className="w-3.5 h-3.5 text-[#94A3B8] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Filter by employee name, lead owner, or details..."
-              className="w-full pl-8 pr-3 py-1.5 text-xs bg-white border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:border-[#17C964]"
+              className="w-full pl-8 pr-3 py-2 text-xs bg-white border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:border-[#17C964]"
             />
           </div>
 
-          <select
-            value={actionFilter}
-            onChange={(e) => setActionFilter(e.target.value)}
-            aria-label="Filter log events"
-            className="px-3 py-1.5 text-xs bg-white border border-[#CBD5E1] rounded-lg text-[#0F172A]"
-          >
-            <option value="all">All Events</option>
-            <option value="unlocks">Unlocks &amp; View Switches</option>
-            <option value="changes">Edits, Calls &amp; Deletes</option>
-          </select>
+          <div className="flex items-center gap-2">
+            <select
+              value={actionFilter}
+              onChange={(e) => setActionFilter(e.target.value)}
+              aria-label="Filter log events"
+              className="flex-1 sm:flex-none px-3 py-2 text-xs bg-white border border-[#CBD5E1] rounded-lg text-[#0F172A]"
+            >
+              <option value="all">All Events</option>
+              <option value="unlocks">Unlocks &amp; View Switches</option>
+              <option value="changes">Edits, Calls &amp; Deletes</option>
+            </select>
 
-          <button
-            type="button"
-            onClick={fetchLogs}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#334155] bg-white border border-[#CBD5E1] hover:bg-[#F1F5F9] rounded-lg cursor-pointer"
-          >
-            <RefreshCw className="w-3.5 h-3.5 text-[#059669]" />
-            <span>Refresh</span>
-          </button>
+            <button
+              type="button"
+              onClick={fetchLogs}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#334155] bg-white border border-[#CBD5E1] hover:bg-[#F1F5F9] rounded-lg cursor-pointer shrink-0"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-[#059669]" />
+              <span>Refresh</span>
+            </button>
+          </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-5">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5">
           {loading ? (
             <div className="py-12 text-center text-xs text-[#64748B]">
               Loading timestamp logs...
@@ -628,52 +634,87 @@ export function LeadAccessLogsModal({
               </p>
             </div>
           ) : (
-            <div className="border border-[#E2E8F0] rounded-xl overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0] text-[#64748B] font-semibold">
-                      <th className="py-2.5 px-3.5 whitespace-nowrap">Timestamp</th>
-                      <th className="py-2.5 px-3.5 whitespace-nowrap">Accessed By</th>
-                      <th className="py-2.5 px-3.5 whitespace-nowrap">Lead Owner</th>
-                      <th className="py-2.5 px-3.5 whitespace-nowrap">Action</th>
-                      <th className="py-2.5 px-3.5">Details</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#F1F5F9]">
-                    {filteredLogs.map((entry) => {
-                      const meta = ACTION_LABELS[entry.action] || {
-                        label: entry.action,
-                        toneClass: 'bg-[#F8FAFC] text-[#334155] border-[#CBD5E1]',
-                      };
-                      return (
-                        <tr key={entry.id} className="hover:bg-[#F8FAFC]/80">
-                          <td className="py-2.5 px-3.5 whitespace-nowrap font-mono-tabular text-[11px] text-[#334155]">
-                            {formatAuditTimestamp(entry.createdAt)}
-                          </td>
-                          <td className="py-2.5 px-3.5 whitespace-nowrap font-semibold text-[#0F172A]">
-                            {entry.viewerName}
-                          </td>
-                          <td className="py-2.5 px-3.5 whitespace-nowrap font-medium text-[#334155]">
-                            {entry.targetName}
-                          </td>
-                          <td className="py-2.5 px-3.5 whitespace-nowrap">
-                            <span
-                              className={`inline-block px-2 py-0.5 text-[11px] font-semibold border rounded-md ${meta.toneClass}`}
-                            >
-                              {meta.label}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3.5 text-[#475569]">
-                            {entry.details || '—'}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+            <>
+              <div className="hidden md:block border border-[#E2E8F0] rounded-xl overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0] text-[#64748B] font-semibold">
+                        <th className="py-2.5 px-3.5 whitespace-nowrap">Timestamp</th>
+                        <th className="py-2.5 px-3.5 whitespace-nowrap">Accessed By</th>
+                        <th className="py-2.5 px-3.5 whitespace-nowrap">Lead Owner</th>
+                        <th className="py-2.5 px-3.5 whitespace-nowrap">Action</th>
+                        <th className="py-2.5 px-3.5">Details</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#F1F5F9]">
+                      {filteredLogs.map((entry) => {
+                        const meta = ACTION_LABELS[entry.action] || {
+                          label: entry.action,
+                          toneClass: 'bg-[#F8FAFC] text-[#334155] border-[#CBD5E1]',
+                        };
+                        return (
+                          <tr key={entry.id} className="hover:bg-[#F8FAFC]/80">
+                            <td className="py-2.5 px-3.5 whitespace-nowrap font-mono-tabular text-[11px] text-[#334155]">
+                              {formatAuditTimestamp(entry.createdAt)}
+                            </td>
+                            <td className="py-2.5 px-3.5 whitespace-nowrap font-semibold text-[#0F172A]">
+                              {entry.viewerName}
+                            </td>
+                            <td className="py-2.5 px-3.5 whitespace-nowrap font-medium text-[#334155]">
+                              {entry.targetName}
+                            </td>
+                            <td className="py-2.5 px-3.5 whitespace-nowrap">
+                              <span
+                                className={`inline-block px-2 py-0.5 text-[11px] font-semibold border rounded-md ${meta.toneClass}`}
+                              >
+                                {meta.label}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3.5 text-[#475569]">
+                              {entry.details || '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
+
+              <div className="md:hidden space-y-2.5">
+                {filteredLogs.map((entry) => {
+                  const meta = ACTION_LABELS[entry.action] || {
+                    label: entry.action,
+                    toneClass: 'bg-[#F8FAFC] text-[#334155] border-[#CBD5E1]',
+                  };
+                  return (
+                    <div
+                      key={entry.id}
+                      className="p-3.5 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC]/60 space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span
+                          className={`inline-block px-2 py-0.5 text-[11px] font-semibold border rounded-md ${meta.toneClass}`}
+                        >
+                          {meta.label}
+                        </span>
+                        <span className="font-mono-tabular text-[11px] text-[#64748B]">
+                          {formatAuditTimestamp(entry.createdAt)}
+                        </span>
+                      </div>
+                      <div className="text-xs text-[#0F172A]">
+                        <strong>{entry.viewerName}</strong> →{' '}
+                        <span className="text-[#334155]">{entry.targetName}</span>
+                      </div>
+                      {entry.details && (
+                        <div className="text-xs text-[#475569]">{entry.details}</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </div>
 

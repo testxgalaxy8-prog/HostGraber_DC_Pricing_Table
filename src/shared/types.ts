@@ -258,7 +258,8 @@ export type LeadStatus =
   | 'call_needed'
   | 'deny'
   | 'converted'
-  | 'existing_client';
+  | 'existing_client'
+  | 'not_required';
 
 export type LeadSource =
   | 'manual'
@@ -329,4 +330,16 @@ export interface LeadWebhookConfig {
   webhookUrl: string;
   webhookSecret: string;
 }
+
+export interface LeadTransferCandidate {
+  id: number;
+  name: string;
+  phone: string;
+  status: LeadStatus;
+  leadDate: string;
+  followUpDate: string | null;
+  ownerUserId: number | null;
+  ownerName: string;
+}
+
 

@@ -204,7 +204,7 @@ export function LeadFormModal({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-[#334155] mb-1">
+              <label className="block text-xs font-semibold text-[#334155] mb-1.5">
                 Client Name *
               </label>
               <input
@@ -213,12 +213,12 @@ export function LeadFormModal({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. Rahul Sharma"
-                className="w-full px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
+                className="w-full h-10 px-3 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-[#334155] mb-1">
+              <label className="block text-xs font-semibold text-[#334155] mb-1.5">
                 Mobile Number *
               </label>
               <input
@@ -227,20 +227,20 @@ export function LeadFormModal({
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="e.g. 9876543210 or +91..."
-                className="w-full px-3 py-2 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
+                className="w-full h-10 px-3 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
               />
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
             <div>
-              <label className="block text-xs font-semibold text-[#334155] mb-1">
+              <label className="block text-xs font-semibold text-[#334155] mb-1.5">
                 Lead Status
               </label>
               <select
                 value={status}
                 onChange={(e) => setStatus(e.target.value as LeadStatus)}
-                className={`w-full px-3 py-2 text-sm font-semibold border rounded-lg focus:outline-none ${statusMeta.selectClass}`}
+                className={`w-full h-10 px-3 text-sm font-semibold border rounded-lg cursor-pointer focus:outline-none ${statusMeta.selectClass}`}
               >
                 {ALL_LEAD_STATUSES.map((st) => (
                   <option key={st} value={st} className="bg-white text-[#0F172A]">
@@ -251,13 +251,13 @@ export function LeadFormModal({
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-[#334155] mb-1">
+              <label className="block text-xs font-semibold text-[#334155] mb-1.5">
                 Lead Source
               </label>
               <select
                 value={source}
                 onChange={(e) => setSource(e.target.value as LeadSource)}
-                className="w-full px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
+                className="w-full h-10 px-3 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] cursor-pointer focus:outline-none focus:bg-white focus:border-[#17C964]"
               >
                 {LEAD_FORM_SOURCES.map((src) => (
                   <option key={src} value={src}>
@@ -268,7 +268,7 @@ export function LeadFormModal({
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-[#334155] mb-1">
+              <label className="block text-xs font-semibold text-[#334155] mb-1.5">
                 Campaign / Tag
               </label>
               <input
@@ -276,26 +276,28 @@ export function LeadFormModal({
                 value={campaignName}
                 onChange={(e) => setCampaignName(e.target.value)}
                 placeholder="e.g. Cloud VPS Inquiry"
-                className="w-full px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
+                className="w-full h-10 px-3 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
               />
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
             <div>
-              <label className="block text-xs font-semibold text-[#334155] mb-1">
-                Lead / Call Date
-              </label>
+              <div className="min-h-[20px] flex items-center mb-1.5">
+                <label className="text-xs font-semibold text-[#334155]">
+                  Lead / Call Date
+                </label>
+              </div>
               <input
                 type="date"
                 value={leadDate}
                 onChange={(e) => setLeadDate(e.target.value)}
-                className="w-full px-3 py-2 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
+                className="w-full h-10 px-3 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
               />
             </div>
 
             <div>
-              <div className="flex items-center justify-between mb-1">
+              <div className="min-h-[20px] flex items-center justify-between mb-1.5">
                 <label className="text-xs font-semibold text-[#334155]">
                   Follow-up Date
                 </label>
@@ -336,7 +338,7 @@ export function LeadFormModal({
                 type="date"
                 value={followUpDate}
                 onChange={(e) => setFollowUpDate(e.target.value)}
-                className="w-full px-3 py-2 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
+                className="w-full h-10 px-3 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
               />
             </div>
           </div>

@@ -54,6 +54,7 @@ import {
   lockColleagueLeads,
   rotateAiSensyWebhookSecret,
   setUserLeadSecurityCode,
+  transferLeadsBySuperAdmin,
   unlockColleagueLeads,
   updateLeadRecord,
 } from './src/db/leads.ts';
@@ -2140,6 +2141,59 @@ app.post(
       }
       console.error('POST /api/leads/import failed:', error);
       res.status(400).json({ error: 'Failed to import leads.' });
+    }
+  }
+);
+
+app.post(
+  '/api/leads/transfer',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const body = req.body as {
+        leadIds?: unknown;
+        fromUserId?: unknown;
+        targetUserId?: unknown;
+        note?: string;
+      };
+
+      const targetUserId = Number(body.targetUserId);
+      if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+        res.status(400).json({ error: 'Valid destination team member is required.' });
+        return;
+      }
+
+      const leadIds = Array.isArray(body.leadIds)
+        ? body.leadIds
+            .map((v) => Number(v))
+            .filter((v) => Number.isInteger(v) && v > 0)
+        : undefined;
+
+      const fromUserId =
+        body.fromUserId !== undefined && body.fromUserId !== null
+          ? Number(body.fromUserId)
+          : null;
+
+      const actorName = req.dbUser!.displayName || req.dbUser!.username;
+      const result = await transferLeadsBySuperAdmin({
+        leadIds,
+        fromUserId:
+          fromUserId && Number.isInteger(fromUserId) && fromUserId > 0
+            ? fromUserId
+            : null,
+        targetUserId,
+        note: typeof body.note === 'string' ? body.note : null,
+        actorUserId: req.dbUser!.id,
+        actorName,
+      });
+
+      res.json({ ok: true, ...result });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to transfer leads.';
+      res.status(400).json({ error: message });
     }
   }
 );

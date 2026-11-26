@@ -117,19 +117,19 @@ export function IntervenedByDropdown({
   const showOtherOption = !query.trim() || 'intervened by other'.includes(query.trim().toLowerCase());
 
   return (
-    <div ref={containerRef} className="relative">
+    <div ref={containerRef} className="relative w-full sm:w-auto">
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
         aria-expanded={open}
         aria-haspopup="listbox"
-        className={`inline-flex items-center justify-between gap-2.5 px-3.5 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
+        className={`w-full sm:w-auto inline-flex items-center justify-between gap-2.5 px-3.5 py-2 min-h-[38px] text-xs font-semibold rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
           scope !== 'me'
             ? 'bg-[#ECFDF5] border-[#6EE7B7] text-[#065F46]'
-            : 'bg-[#F8FAFC] border-[#CBD5E1] text-[#0F172A] hover:bg-white hover:border-[#94A3B8]'
+            : 'bg-white border-[#CBD5E1] text-[#0F172A] hover:bg-[#F8FAFC] hover:border-[#94A3B8]'
         }`}
       >
-        <span>
+        <span className="truncate">
           Intervened By {activeLabel} ({currentCount})
         </span>
         {open ? (
@@ -140,7 +140,7 @@ export function IntervenedByDropdown({
       </button>
 
       {open && (
-        <div className="absolute left-0 mt-1.5 w-80 max-w-[calc(100vw-2rem)] bg-white border border-[#E2E8F0] rounded-xl shadow-xl z-40 overflow-hidden">
+        <div className="absolute left-0 right-0 sm:left-auto sm:right-0 sm:w-80 mt-1.5 bg-white border border-[#E2E8F0] rounded-xl shadow-xl z-40 overflow-hidden">
           <div className="p-2.5 border-b border-[#F1F5F9]">
             <div className="relative">
               <input

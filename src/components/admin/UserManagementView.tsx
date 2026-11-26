@@ -346,8 +346,8 @@ export function UserManagementView({
                   onChange={(e) => setRole(e.target.value as UserRole)}
                   className="w-full px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
                 >
-                  <option value="admin">Admin (Upload Excel &amp; Manage Plans)</option>
-                  <option value="super_admin">Super Admin (Full System Access)</option>
+                  <option value="admin">Admin (Manage Own Leads, Plans &amp; Excel)</option>
+                  <option value="super_admin">Super Admin (Full Access &amp; Lead Transfer)</option>
                 </select>
               </div>
               <div className="flex items-end">

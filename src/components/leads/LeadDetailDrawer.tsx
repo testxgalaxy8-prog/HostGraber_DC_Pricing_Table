@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import {
+  ArrowRightLeft,
   CalendarClock,
   Edit3,
   MessageCircle,
@@ -30,16 +31,20 @@ function addDaysIso(days: number): string {
 
 export function LeadDetailDrawer({
   leadId,
+  canTransfer = false,
   onClose,
   onEditLead,
+  onTransferLead,
   onOpenWhatsApp,
   onLeadUpdated,
   onLeadDeleted,
   onToast,
 }: {
   leadId: number | null;
+  canTransfer?: boolean;
   onClose: () => void;
   onEditLead: (lead: LeadItem) => void;
+  onTransferLead?: (lead: LeadItem) => void;
   onOpenWhatsApp: (lead: LeadItem) => void;
   onLeadUpdated: (lead: LeadItem) => void;
   onLeadDeleted: (leadId: number) => void;
@@ -249,6 +254,16 @@ export function LeadDetailDrawer({
                   <Edit3 className="w-3.5 h-3.5" />
                   <span>Edit Details</span>
                 </button>
+                {canTransfer && onTransferLead && (
+                  <button
+                    type="button"
+                    onClick={() => onTransferLead(lead)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#047857] bg-white border border-[#A7F3D0] hover:bg-[#ECFDF5] rounded-lg cursor-pointer"
+                  >
+                    <ArrowRightLeft className="w-3.5 h-3.5" />
+                    <span>Transfer</span>
+                  </button>
+                )}
 
                 {!confirmDelete ? (
                   <button
@@ -307,15 +322,17 @@ export function LeadDetailDrawer({
                   className="w-full p-2.5 text-sm bg-white border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:border-[#17C964]"
                 />
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
                   <div>
-                    <label className="block text-[11px] font-medium text-[#475569] mb-1">
-                      Outcome / Status
-                    </label>
+                    <div className="min-h-[18px] flex items-center mb-1">
+                      <label className="text-[11px] font-medium text-[#475569]">
+                        Outcome / Status
+                      </label>
+                    </div>
                     <select
                       value={statusAtCall}
                       onChange={(e) => setStatusAtCall(e.target.value as LeadStatus)}
-                      className={`w-full px-2.5 py-1.5 text-xs font-semibold border rounded-lg ${LEAD_STATUS_META[statusAtCall].selectClass}`}
+                      className={`w-full h-9 px-2.5 text-xs font-semibold border rounded-lg cursor-pointer ${LEAD_STATUS_META[statusAtCall].selectClass}`}
                     >
                       {ALL_LEAD_STATUSES.map((st) => (
                         <option key={st} value={st} className="bg-white text-[#0F172A]">
@@ -326,19 +343,21 @@ export function LeadDetailDrawer({
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-medium text-[#475569] mb-1">
-                      Call Date
-                    </label>
+                    <div className="min-h-[18px] flex items-center mb-1">
+                      <label className="text-[11px] font-medium text-[#475569]">
+                        Call Date
+                      </label>
+                    </div>
                     <input
                       type="date"
                       value={callDate}
                       onChange={(e) => setCallDate(e.target.value)}
-                      className="w-full px-2.5 py-1.5 text-xs font-mono-tabular bg-white border border-[#CBD5E1] rounded-lg text-[#0F172A]"
+                      className="w-full h-9 px-2.5 text-xs font-mono-tabular bg-white border border-[#CBD5E1] rounded-lg text-[#0F172A]"
                     />
                   </div>
 
                   <div>
-                    <div className="flex items-center justify-between mb-1">
+                    <div className="min-h-[18px] flex items-center justify-between mb-1">
                       <label className="text-[11px] font-medium text-[#475569]">
                         Next Follow-up
                       </label>
@@ -372,7 +391,7 @@ export function LeadDetailDrawer({
                       type="date"
                       value={followUpDate}
                       onChange={(e) => setFollowUpDate(e.target.value)}
-                      className="w-full px-2.5 py-1.5 text-xs font-mono-tabular bg-white border border-[#CBD5E1] rounded-lg text-[#0F172A]"
+                      className="w-full h-9 px-2.5 text-xs font-mono-tabular bg-white border border-[#CBD5E1] rounded-lg text-[#0F172A]"
                     />
                   </div>
                 </div>

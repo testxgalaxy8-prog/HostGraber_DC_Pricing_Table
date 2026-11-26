@@ -902,6 +902,110 @@ export async function deleteLeadsBulk(
   return deleted.length;
 }
 
+export async function transferLeadsBySuperAdmin(input: {
+  leadIds?: number[];
+  fromUserId?: number | null;
+  targetUserId: number;
+  note?: string | null;
+  actorUserId: number;
+  actorName: string;
+}): Promise<{
+  transferredCount: number;
+  targetUserId: number;
+  targetOwnerName: string;
+}> {
+  await ensureLeadOwnersBackfilled();
+
+  const [targetUser] = await db
+    .select()
+    .from(users)
+    .where(and(eq(users.id, input.targetUserId), eq(users.isActive, true)))
+    .limit(1);
+
+  if (!targetUser) {
+    throw new Error('Selected destination user is invalid or inactive.');
+  }
+
+  const targetDisplayName = targetUser.displayName || targetUser.username;
+
+  const cleanLeadIds = Array.isArray(input.leadIds)
+    ? Array.from(
+        new Set(
+          input.leadIds.filter((id) => Number.isInteger(id) && id > 0)
+        )
+      )
+    : [];
+
+  let rowsToTransfer: Array<typeof leads.$inferSelect> = [];
+
+  if (cleanLeadIds.length > 0) {
+    if (cleanLeadIds.length > 500) {
+      throw new Error('Cannot transfer more than 500 leads in a single request.');
+    }
+    rowsToTransfer = await db
+      .select()
+      .from(leads)
+      .where(inArray(leads.id, cleanLeadIds));
+  } else if (input.fromUserId && Number.isInteger(input.fromUserId) && input.fromUserId > 0) {
+    if (input.fromUserId === targetUser.id) {
+      throw new Error('Source and destination users must be different.');
+    }
+    rowsToTransfer = await db
+      .select()
+      .from(leads)
+      .where(eq(leads.ownerUserId, input.fromUserId));
+  } else {
+    throw new Error('Select specific leads or a source team member to transfer.');
+  }
+
+  const eligibleRows = rowsToTransfer.filter(
+    (row) => row.ownerUserId !== targetUser.id
+  );
+
+  if (eligibleRows.length === 0) {
+    throw new Error(
+      rowsToTransfer.length === 0
+        ? 'No matching leads found to transfer.'
+        : `Selected leads already belong to ${targetDisplayName}.`
+    );
+  }
+
+  const eligibleIds = eligibleRows.map((r) => r.id);
+  const previousOwners = Array.from(
+    new Set(eligibleRows.map((r) => r.ownerName || 'Unassigned'))
+  ).join(', ');
+
+  await db
+    .update(leads)
+    .set({
+      ownerUserId: targetUser.id,
+      ownerName: targetDisplayName,
+      updatedBy: input.actorName,
+      updatedAt: new Date(),
+    })
+    .where(inArray(leads.id, eligibleIds));
+
+  const cleanNote = input.note?.trim();
+  await recordLeadAccessLog({
+    viewerUserId: input.actorUserId,
+    viewerName: input.actorName,
+    targetUserId: targetUser.id,
+    targetName: targetDisplayName,
+    action: 'transfer_lead',
+    details: `Transferred ${eligibleIds.length} ${
+      eligibleIds.length === 1 ? 'lead' : 'leads'
+    } from ${previousOwners} to ${targetDisplayName}${
+      cleanNote ? ` (${cleanNote})` : ''
+    }`,
+  });
+
+  return {
+    transferredCount: eligibleIds.length,
+    targetUserId: targetUser.id,
+    targetOwnerName: targetDisplayName,
+  };
+}
+
 export async function bulkImportLeadRecords(
   rows: Array<{
     name?: string;

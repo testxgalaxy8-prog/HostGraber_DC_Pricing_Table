@@ -129,7 +129,7 @@ function PortalShell() {
       return { title: 'Update Password', crumbs: ['Home', 'Security'] };
     }
     if (effectiveView === 'leads') {
-      return { title: 'Lead Manage', crumbs: ['Home', 'Lead Manage'] };
+      return { title: 'Lead Management', crumbs: ['Home', 'Lead Management'] };
     }
     if (effectiveView === 'admin') {
       const tabLabel =
@@ -356,23 +356,21 @@ function PortalShell() {
           )}
         </nav>
 
-        {/* Bottom Collapse Bar */}
+        {/* Bottom Collapse Toggle */}
         {!isMobile && (
-          <div className="h-11 bg-[#14181F] border-t border-[#2A303C] flex items-center shrink-0">
-            <button
-              type="button"
-              onClick={() => setSidebarCollapsed((c) => !c)}
-              className="w-full h-full flex items-center justify-center text-[#94A3B8] hover:text-white hover:bg-[#1D2129] transition-colors cursor-pointer"
-              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            >
-              {sidebarCollapsed ? (
-                <ChevronRight className="w-4 h-4" />
-              ) : (
-                <ChevronLeft className="w-4 h-4" />
-              )}
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed((c) => !c)}
+            className="h-11 bg-[#14181F] border-t border-[#2A303C] flex items-center justify-center text-[#94A3B8] hover:text-white hover:bg-[#1D2129] transition-colors cursor-pointer shrink-0"
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {sidebarCollapsed ? (
+              <ChevronRight className="w-4 h-4" />
+            ) : (
+              <ChevronLeft className="w-4 h-4" />
+            )}
+          </button>
         )}
       </div>
     );
@@ -382,7 +380,7 @@ function PortalShell() {
     <div className="min-h-screen flex bg-[#F2F4F7] text-[#0F172A] overflow-x-clip">
       {/* Desktop Persistent Sidebar */}
       <aside
-        className={`hidden lg:block shrink-0 transition-[width] duration-200 border-r border-[#2A303C] sticky top-0 h-screen ${
+        className={`hidden lg:block shrink-0 self-start border-r border-[#2A303C] transition-[width] duration-200 sticky top-0 h-screen overflow-hidden ${
           sidebarCollapsed ? 'w-[72px]' : 'w-60'
         }`}
       >
@@ -455,7 +453,7 @@ function PortalShell() {
           <div className="flex items-center gap-3 shrink-0">
             {user ? (
               <>
-                {!user.mustChangePassword && (
+                {!user.mustChangePassword && effectiveView !== 'leads' && (
                   <button
                     type="button"
                     onClick={() => navigateToAdminTab('upload')}
@@ -517,7 +515,7 @@ function PortalShell() {
         </header>
 
         {/* Main Scrollable Canvas */}
-        <main className="flex-1 min-w-0 p-4 sm:p-8">
+        <main className="flex-1 min-w-0 p-4 sm:p-5 lg:p-6">
           {effectiveView === 'change_password' && user ? (
             <ChangePasswordView
               forced={Boolean(user.mustChangePassword)}
