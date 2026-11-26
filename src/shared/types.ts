@@ -278,6 +278,7 @@ export interface LeadRemarkItem {
   statusAtCall: LeadStatus;
   callDate: string;
   followUpDate: string | null;
+  followUpTime: string | null;
   loggedBy: string;
   createdAt: string;
 }
@@ -295,6 +296,8 @@ export interface LeadItem {
   latestRemark: string;
   leadDate: string;
   followUpDate: string | null;
+  followUpTime: string | null;
+  reminderNotifiedAt: string | null;
   createdBy: string;
   updatedBy: string;
   createdAt: string;

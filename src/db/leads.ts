@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { and, count, desc, eq, gt, inArray, isNull, or } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, or } from 'drizzle-orm';
 import { db } from './index.ts';
 import {
   leadAccessGrants,
@@ -13,6 +13,7 @@ import { getOrInitSettings } from './defaults.ts';
 import { hashPassword, verifyPassword } from '../lib/password.ts';
 import {
   getTodayIsoDate,
+  normalizeFollowUpTimeInput,
   normalizeIsoDateInput,
   normalizeLeadPhone,
   normalizeLeadSource,
@@ -51,6 +52,7 @@ export interface CreateOrUpdateLeadInput {
   latestRemark?: string | null;
   leadDate?: string | null;
   followUpDate?: string | null;
+  followUpTime?: string | null;
   actor: string;
 }
 
@@ -59,6 +61,7 @@ export interface AddLeadRemarkInput {
   statusAtCall: LeadStatus | string;
   callDate?: string | null;
   followUpDate?: string | null;
+  followUpTime?: string | null;
   actor: string;
 }
 
@@ -80,6 +83,10 @@ function mapLeadRow(
     latestRemark: row.latestRemark || '',
     leadDate: row.leadDate,
     followUpDate: row.followUpDate ?? null,
+    followUpTime: row.followUpTime ?? null,
+    reminderNotifiedAt: row.reminderNotifiedAt
+      ? row.reminderNotifiedAt.toISOString()
+      : null,
     createdBy: row.createdBy,
     updatedBy: row.updatedBy,
     createdAt: row.createdAt.toISOString(),
@@ -97,6 +104,7 @@ function mapRemarkRow(row: typeof leadRemarks.$inferSelect): LeadRemarkItem {
     statusAtCall: normalizeLeadStatus(row.statusAtCall),
     callDate: row.callDate,
     followUpDate: row.followUpDate ?? null,
+    followUpTime: row.followUpTime ?? null,
     loggedBy: row.loggedBy,
     createdAt: row.createdAt.toISOString(),
   };
@@ -565,6 +573,9 @@ export async function createLeadRecord(
   const source = normalizeLeadSource(input.source);
   const leadDate = normalizeIsoDateInput(input.leadDate) ?? getTodayIsoDate();
   const followUpDate = normalizeIsoDateInput(input.followUpDate);
+  const followUpTime = followUpDate
+    ? normalizeFollowUpTimeInput(input.followUpTime)
+    : null;
   const latestRemark = (input.latestRemark || '').trim();
   const campaignName = input.campaignName?.trim() || null;
 
@@ -583,6 +594,8 @@ export async function createLeadRecord(
         latestRemark,
         leadDate,
         followUpDate,
+        followUpTime,
+        reminderNotifiedAt: null,
         createdBy: input.actor,
         updatedBy: input.actor,
       })
@@ -595,6 +608,7 @@ export async function createLeadRecord(
         statusAtCall: status,
         callDate: leadDate,
         followUpDate,
+        followUpTime,
         loggedBy: input.actor,
       });
     }
@@ -687,6 +701,16 @@ export async function updateLeadRecord(
     input.followUpDate !== undefined
       ? normalizeIsoDateInput(input.followUpDate)
       : existing.followUpDate;
+  const nextFollowUpTime =
+    nextFollowUpDate === null
+      ? null
+      : input.followUpTime !== undefined
+        ? normalizeFollowUpTimeInput(input.followUpTime)
+        : existing.followUpTime;
+
+  const scheduleChanged =
+    nextFollowUpDate !== existing.followUpDate ||
+    nextFollowUpTime !== existing.followUpTime;
 
   await db
     .update(leads)
@@ -700,6 +724,8 @@ export async function updateLeadRecord(
       latestRemark: nextRemark,
       leadDate: nextLeadDate,
       followUpDate: nextFollowUpDate,
+      followUpTime: nextFollowUpTime,
+      ...(scheduleChanged ? { reminderNotifiedAt: null } : {}),
       updatedBy: input.actor,
       updatedAt: new Date(),
     })
@@ -760,6 +786,16 @@ export async function addLeadRemarkRecord(
     input.followUpDate !== undefined
       ? normalizeIsoDateInput(input.followUpDate)
       : existing.followUpDate;
+  const nextFollowUpTime =
+    nextFollowUpDate === null
+      ? null
+      : input.followUpTime !== undefined
+        ? normalizeFollowUpTimeInput(input.followUpTime)
+        : existing.followUpTime;
+
+  const scheduleChanged =
+    nextFollowUpDate !== existing.followUpDate ||
+    nextFollowUpTime !== existing.followUpTime;
 
   await db.transaction(async (tx) => {
     await tx.insert(leadRemarks).values({
@@ -768,6 +804,7 @@ export async function addLeadRemarkRecord(
       statusAtCall: nextStatus,
       callDate,
       followUpDate: nextFollowUpDate,
+      followUpTime: nextFollowUpTime,
       loggedBy: input.actor,
     });
 
@@ -778,6 +815,8 @@ export async function addLeadRemarkRecord(
         latestRemark: cleanRemark,
         leadDate: callDate,
         followUpDate: nextFollowUpDate,
+        followUpTime: nextFollowUpTime,
+        ...(scheduleChanged || nextFollowUpTime ? { reminderNotifiedAt: null } : {}),
         updatedBy: input.actor,
         updatedAt: new Date(),
       })
@@ -798,6 +837,111 @@ export async function addLeadRemarkRecord(
       details: `Logged call update on "${existing.name}" (${nextStatus})`,
     });
   }
+
+  return fetchLeadById(leadId);
+}
+
+export async function fetchActiveLeadReminders(options: {
+  viewerUserId: number;
+  sessionTokenHash: string;
+}): Promise<LeadItem[]> {
+  await ensureLeadOwnersBackfilled();
+
+  const unlockedSet = await getUnlockedTargetIds(
+    options.sessionTokenHash,
+    options.viewerUserId
+  );
+  const allowedOwnerIds = Array.from(
+    new Set([options.viewerUserId, ...Array.from(unlockedSet)])
+  );
+
+  const rows = await db
+    .select()
+    .from(leads)
+    .where(
+      and(
+        inArray(leads.ownerUserId, allowedOwnerIds),
+        isNotNull(leads.followUpDate),
+        inArray(leads.status, ['call_needed', 'positive', 'existing_client'])
+      )
+    )
+    .orderBy(asc(leads.followUpDate), asc(leads.followUpTime), desc(leads.updatedAt));
+
+  if (rows.length === 0) return [];
+
+  const leadIds = rows.map((r) => r.id);
+  const countRows = await db
+    .select({
+      leadId: leadRemarks.leadId,
+      total: count(),
+    })
+    .from(leadRemarks)
+    .where(inArray(leadRemarks.leadId, leadIds))
+    .groupBy(leadRemarks.leadId);
+
+  const countMap = new Map<number, number>();
+  for (const row of countRows) {
+    countMap.set(row.leadId, Number(row.total));
+  }
+
+  return rows.map((row) => mapLeadRow(row, countMap.get(row.id) ?? 0));
+}
+
+export async function updateLeadReminderAction(
+  leadId: number,
+  input: {
+    action: 'dismiss' | 'snooze';
+    followUpDate?: string | null;
+    followUpTime?: string | null;
+  },
+  access: { viewerUserId: number; viewerName: string; sessionTokenHash: string }
+): Promise<LeadItem | null> {
+  const [existing] = await db
+    .select()
+    .from(leads)
+    .where(eq(leads.id, leadId))
+    .limit(1);
+  if (!existing) return null;
+
+  const allowed = await hasLeadOwnerAccess(
+    access.sessionTokenHash,
+    access.viewerUserId,
+    existing.ownerUserId
+  );
+  if (!allowed) {
+    throw new LeadAccessDeniedError(
+      'Security code required to update reminder for this lead.',
+      existing.ownerUserId ?? undefined
+    );
+  }
+
+  if (input.action === 'dismiss') {
+    await db
+      .update(leads)
+      .set({
+        reminderNotifiedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(leads.id, leadId));
+    return fetchLeadById(leadId);
+  }
+
+  const nextDate = normalizeIsoDateInput(input.followUpDate);
+  const nextTime = normalizeFollowUpTimeInput(input.followUpTime);
+  if (!nextDate || !nextTime) {
+    throw new Error('Valid snooze follow-up date and time are required.');
+  }
+
+  await db
+    .update(leads)
+    .set({
+      followUpDate: nextDate,
+      followUpTime: nextTime,
+      reminderNotifiedAt: null,
+      updatedBy: access.viewerName,
+      updatedAt: new Date(),
+    })
+    .where(eq(leads.id, leadId));
 
   return fetchLeadById(leadId);
 }

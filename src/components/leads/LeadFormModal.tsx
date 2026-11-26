@@ -5,6 +5,7 @@ import {
   LEAD_FORM_SOURCES,
   LEAD_SOURCE_LABELS,
   LEAD_STATUS_META,
+  addDaysIso,
   getTodayIsoDate,
 } from '../../shared/leads.ts';
 import type {
@@ -13,15 +14,7 @@ import type {
   LeadSource,
   LeadStatus,
 } from '../../shared/types.ts';
-
-function addDaysIso(days: number): string {
-  const date = new Date();
-  date.setDate(date.getDate() + days);
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
+import { CallReminderPicker } from './CallReminderPicker.tsx';
 
 export interface LeadFormSubmitPayload {
   ownerUserId?: number | null;
@@ -33,6 +26,7 @@ export interface LeadFormSubmitPayload {
   latestRemark: string;
   leadDate: string;
   followUpDate: string | null;
+  followUpTime: string | null;
 }
 
 export function LeadFormModal({
@@ -64,6 +58,7 @@ export function LeadFormModal({
   const [status, setStatus] = useState<LeadStatus>('call_needed');
   const [leadDate, setLeadDate] = useState(getTodayIsoDate());
   const [followUpDate, setFollowUpDate] = useState('');
+  const [followUpTime, setFollowUpTime] = useState('');
   const [latestRemark, setLatestRemark] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -79,6 +74,7 @@ export function LeadFormModal({
       setStatus(editingLead.status);
       setLeadDate(editingLead.leadDate || getTodayIsoDate());
       setFollowUpDate(editingLead.followUpDate || '');
+      setFollowUpTime(editingLead.followUpTime || '');
       setLatestRemark(editingLead.latestRemark || '');
     } else {
       setOwnerUserId(defaultOwnerUserId || currentUserId);
@@ -89,6 +85,7 @@ export function LeadFormModal({
       setStatus('call_needed');
       setLeadDate(getTodayIsoDate());
       setFollowUpDate(getTodayIsoDate());
+      setFollowUpTime('');
       setLatestRemark('');
     }
   }, [isOpen, editingLead, currentUserId, defaultOwnerUserId]);
@@ -106,6 +103,13 @@ export function LeadFormModal({
 
   const statusMeta = LEAD_STATUS_META[status];
 
+  const handleFollowUpDateChange = (nextDate: string) => {
+    setFollowUpDate(nextDate);
+    if (!nextDate) {
+      setFollowUpTime('');
+    }
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -119,6 +123,10 @@ export function LeadFormModal({
       return;
     }
 
+    const cleanFollowUpDate = followUpDate.trim() || null;
+    const cleanFollowUpTime =
+      cleanFollowUpDate && followUpTime.trim() ? followUpTime.trim() : null;
+
     try {
       await onSubmit({
         ownerUserId: editingLead ? editingLead.ownerUserId : ownerUserId,
@@ -129,7 +137,8 @@ export function LeadFormModal({
         status,
         latestRemark: latestRemark.trim(),
         leadDate: leadDate || getTodayIsoDate(),
-        followUpDate: followUpDate.trim() || null,
+        followUpDate: cleanFollowUpDate,
+        followUpTime: cleanFollowUpTime,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to save lead.');
@@ -146,7 +155,7 @@ export function LeadFormModal({
         if (e.target === e.currentTarget && !saving) onClose();
       }}
     >
-      <div className="w-full max-w-xl bg-white border border-[#E2E8F0] rounded-2xl shadow-xl overflow-hidden max-h-[92vh] flex flex-col">
+      <div className="w-full max-w-2xl bg-white border border-[#E2E8F0] rounded-2xl shadow-xl overflow-hidden max-h-[92vh] flex flex-col">
         <div className="px-5 py-4 border-b border-[#E2E8F0] flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-[#ECFDF5] border border-[#A7F3D0] flex items-center justify-center">
@@ -160,7 +169,7 @@ export function LeadFormModal({
                 {editingLead ? `Edit Lead · ${editingLead.name}` : 'Add New Lead'}
               </h3>
               <p className="text-xs text-[#64748B]">
-                Record client contact, lead source, call remark, follow-up date, and status
+                Record client contact, follow-up schedule, callback timer, and status
               </p>
             </div>
           </div>
@@ -281,7 +290,7 @@ export function LeadFormModal({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
             <div>
               <div className="min-h-[20px] flex items-center mb-1.5">
                 <label className="text-xs font-semibold text-[#334155]">
@@ -292,7 +301,7 @@ export function LeadFormModal({
                 type="date"
                 value={leadDate}
                 onChange={(e) => setLeadDate(e.target.value)}
-                className="w-full h-10 px-3 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
+                className="w-full h-10 px-2.5 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
               />
             </div>
 
@@ -304,21 +313,21 @@ export function LeadFormModal({
                 <div className="flex items-center gap-1.5 text-[11px]">
                   <button
                     type="button"
-                    onClick={() => setFollowUpDate(addDaysIso(1))}
+                    onClick={() => handleFollowUpDateChange(addDaysIso(1))}
                     className="text-[#059669] hover:underline cursor-pointer"
                   >
                     +1d
                   </button>
                   <button
                     type="button"
-                    onClick={() => setFollowUpDate(addDaysIso(3))}
+                    onClick={() => handleFollowUpDateChange(addDaysIso(3))}
                     className="text-[#059669] hover:underline cursor-pointer"
                   >
                     +3d
                   </button>
                   <button
                     type="button"
-                    onClick={() => setFollowUpDate(addDaysIso(7))}
+                    onClick={() => handleFollowUpDateChange(addDaysIso(7))}
                     className="text-[#059669] hover:underline cursor-pointer"
                   >
                     +7d
@@ -326,7 +335,7 @@ export function LeadFormModal({
                   {followUpDate && (
                     <button
                       type="button"
-                      onClick={() => setFollowUpDate('')}
+                      onClick={() => handleFollowUpDateChange('')}
                       className="text-[#64748B] hover:text-[#0F172A] cursor-pointer"
                     >
                       Clear
@@ -337,10 +346,22 @@ export function LeadFormModal({
               <input
                 type="date"
                 value={followUpDate}
-                onChange={(e) => setFollowUpDate(e.target.value)}
-                className="w-full h-10 px-3 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
+                onChange={(e) => handleFollowUpDateChange(e.target.value)}
+                className="w-full h-10 px-2.5 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
               />
             </div>
+
+            <CallReminderPicker
+              size="md"
+              surface="muted"
+              label="Call Reminder"
+              followUpDate={followUpDate}
+              followUpTime={followUpTime}
+              onChange={(nextDate, nextTime) => {
+                setFollowUpDate(nextDate);
+                setFollowUpTime(nextTime);
+              }}
+            />
           </div>
 
           <div>

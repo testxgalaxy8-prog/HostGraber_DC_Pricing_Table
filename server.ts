@@ -45,6 +45,7 @@ import {
   createLeadRecord,
   deleteLeadRecord,
   deleteLeadsBulk,
+  fetchActiveLeadReminders,
   fetchLeadAccessLogs,
   fetchLeadById,
   fetchLeadColleagues,
@@ -57,6 +58,7 @@ import {
   transferLeadsBySuperAdmin,
   unlockColleagueLeads,
   updateLeadRecord,
+  updateLeadReminderAction,
 } from './src/db/leads.ts';
 import {
   extractSessionToken,
@@ -1862,6 +1864,25 @@ app.post(
 );
 
 app.get(
+  '/api/leads/reminders',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const access = getLeadAccessContext(req);
+      const items = await fetchActiveLeadReminders({
+        viewerUserId: access.viewerUserId,
+        sessionTokenHash: access.sessionTokenHash,
+      });
+      res.json(items);
+    } catch (error) {
+      console.error('GET /api/leads/reminders failed:', error);
+      res.status(500).json({ error: 'Failed to load scheduled call reminders.' });
+    }
+  }
+);
+
+app.get(
   '/api/leads/:id',
   requireAdminSession,
   requirePasswordChanged,
@@ -1914,6 +1935,7 @@ app.post(
         latestRemark?: string | null;
         leadDate?: string | null;
         followUpDate?: string | null;
+        followUpTime?: string | null;
       };
 
       const created = await createLeadRecord(
@@ -1930,6 +1952,7 @@ app.post(
           latestRemark: body.latestRemark ?? '',
           leadDate: body.leadDate ?? null,
           followUpDate: body.followUpDate ?? null,
+          followUpTime: body.followUpTime ?? null,
           actor: access.viewerName,
         },
         access
@@ -1968,6 +1991,7 @@ app.put(
         latestRemark?: string | null;
         leadDate?: string | null;
         followUpDate?: string | null;
+        followUpTime?: string | null;
       };
 
       const updated = await updateLeadRecord(
@@ -2012,6 +2036,7 @@ app.post(
         statusAtCall?: string;
         callDate?: string | null;
         followUpDate?: string | null;
+        followUpTime?: string | null;
       };
 
       const updated = await addLeadRemarkRecord(
@@ -2021,6 +2046,7 @@ app.post(
           statusAtCall: body.statusAtCall || 'call_needed',
           callDate: body.callDate ?? null,
           followUpDate: body.followUpDate,
+          followUpTime: body.followUpTime,
           actor: access.viewerName,
         },
         access
@@ -2037,6 +2063,55 @@ app.post(
       }
       console.error('POST /api/leads/:id/remarks failed:', error);
       const message = error instanceof Error ? error.message : 'Failed to add call remark.';
+      res.status(400).json({ error: message });
+    }
+  }
+);
+
+app.post(
+  '/api/leads/:id/reminder',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'Invalid lead ID.' });
+        return;
+      }
+      const access = getLeadAccessContext(req);
+      const body = req.body as {
+        action?: string;
+        followUpDate?: string | null;
+        followUpTime?: string | null;
+      };
+
+      if (body.action !== 'dismiss' && body.action !== 'snooze') {
+        res.status(400).json({ error: 'Action must be dismiss or snooze.' });
+        return;
+      }
+
+      const updated = await updateLeadReminderAction(
+        id,
+        {
+          action: body.action,
+          followUpDate: body.followUpDate ?? null,
+          followUpTime: body.followUpTime ?? null,
+        },
+        access
+      );
+      if (!updated) {
+        res.status(404).json({ error: 'Lead not found.' });
+        return;
+      }
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof LeadAccessDeniedError) {
+        res.status(403).json({ error: error.message, requiresUnlock: true });
+        return;
+      }
+      console.error('POST /api/leads/:id/reminder failed:', error);
+      const message = error instanceof Error ? error.message : 'Failed to update reminder.';
       res.status(400).json({ error: message });
     }
   }

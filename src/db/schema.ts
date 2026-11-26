@@ -228,6 +228,8 @@ export const leads = pgTable('leads', {
   latestRemark: text('latest_remark').notNull().default(''),
   leadDate: text('lead_date').notNull(),
   followUpDate: text('follow_up_date'),
+  followUpTime: text('follow_up_time'),
+  reminderNotifiedAt: timestamp('reminder_notified_at'),
   createdBy: text('created_by').notNull().default('admin'),
   updatedBy: text('updated_by').notNull().default('admin'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -243,6 +245,7 @@ export const leadRemarks = pgTable('lead_remarks', {
   statusAtCall: text('status_at_call').notNull(),
   callDate: text('call_date').notNull(),
   followUpDate: text('follow_up_date'),
+  followUpTime: text('follow_up_time'),
   loggedBy: text('logged_by').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });

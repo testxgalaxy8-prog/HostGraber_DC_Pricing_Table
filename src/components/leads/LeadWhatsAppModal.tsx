@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../../lib/api.ts';
 import { copyTextToClipboard } from '../../lib/clipboard.ts';
+import { getTodayIsoDate } from '../../shared/leads.ts';
 import {
   WHATSAPP_COUNTRY_CODES,
   buildWhatsAppSendUrl,
@@ -26,17 +27,19 @@ import type {
   PortalSettings,
 } from '../../shared/types.ts';
 
-type ComposerMode = 'followup' | 'quote';
+type ComposerMode = 'followup' | 'missed_call' | 'renewal' | 'quote';
 
 export function LeadWhatsAppModal({
   lead,
   settings,
   onClose,
+  onLeadUpdated,
   onToast,
 }: {
   lead: LeadItem | null;
   settings: PortalSettings;
   onClose: () => void;
+  onLeadUpdated?: (lead: LeadItem) => void;
   onToast: (type: 'success' | 'error', text: string) => void;
 }) {
   const isOpen = lead !== null;
@@ -48,14 +51,22 @@ export function LeadWhatsAppModal({
   const [selectedPlanId, setSelectedPlanId] = useState<string>('');
   const [selectedTenure, setSelectedTenure] = useState<'all' | BillingCycle>('all');
   const [message, setMessage] = useState('');
+  const [logToHistory, setLogToHistory] = useState(true);
   const [submitted, setSubmitted] = useState(false);
 
   const phoneInputRef = useRef<HTMLInputElement | null>(null);
   const sendLinkRef = useRef<HTMLAnchorElement | null>(null);
 
-  const buildFollowUpGreeting = (target: LeadItem) => {
+  const buildTemplateMessage = (target: LeadItem, templateMode: Exclude<ComposerMode, 'quote'>) => {
     const company = settings.companyName || 'HostGraber';
-    return `Hello ${target.name},\n\nThank you for connecting with ${company}. Following up on your hosting inquiry—please let us know your requirements or preferred time for a quick call so we can share the best plan for you.\n\nRegards,\n${company} Team`;
+    const planMention = target.campaignName ? ` for *${target.campaignName}*` : '';
+    if (templateMode === 'missed_call') {
+      return `Hello ${target.name},\n\nWe tried reaching you on a call regarding your hosting inquiry${planMention} at ${company}, but couldn't connect.\n\nPlease share a convenient time to call you back, or reply right here on WhatsApp.\n\nRegards,\n${company} Team`;
+    }
+    if (templateMode === 'renewal') {
+      return `Hello ${target.name},\n\nFollowing up from ${company} regarding your${planMention || ' hosting'} plan activation/renewal. Let us know if you need the payment link or any technical help to get started today.\n\nRegards,\n${company} Team`;
+    }
+    return `Hello ${target.name},\n\nThank you for connecting with ${company}. Following up on your hosting inquiry${planMention}—please let us know your requirements or preferred time for a quick call so we can share the best plan for you.\n\nRegards,\n${company} Team`;
   };
 
   useEffect(() => {
@@ -63,6 +74,7 @@ export function LeadWhatsAppModal({
     setMode('followup');
     setSubmitted(false);
     setSelectedTenure('all');
+    setLogToHistory(true);
 
     // Pre-fill lead's phone cleanly
     if (lead.normalizedPhone.startsWith('91') && lead.normalizedPhone.length === 12) {
@@ -76,7 +88,7 @@ export function LeadWhatsAppModal({
       setMobileInput(lead.phone);
     }
 
-    setMessage(buildFollowUpGreeting(lead));
+    setMessage(buildTemplateMessage(lead, 'followup'));
 
     if (plans.length === 0) {
       setLoadingPlans(true);
@@ -84,13 +96,25 @@ export function LeadWhatsAppModal({
         .then((list) => {
           setPlans(list);
           if (list.length > 0) {
-            setSelectedPlanId((prev) => prev || String(list[0].id));
+            const matched = lead.campaignName
+              ? list.find((p) =>
+                  p.name.toLowerCase().includes(lead.campaignName!.toLowerCase())
+                )
+              : undefined;
+            setSelectedPlanId(String(matched?.id ?? list[0].id));
           }
         })
         .catch(() => {
           // Follow-up text still works even if plan catalog fails
         })
         .finally(() => setLoadingPlans(false));
+    } else if (lead.campaignName) {
+      const matched = plans.find((p) =>
+        p.name.toLowerCase().includes(lead.campaignName!.toLowerCase())
+      );
+      if (matched) {
+        setSelectedPlanId(String(matched.id));
+      }
     }
   }, [lead]);
 
@@ -131,11 +155,42 @@ export function LeadWhatsAppModal({
 
   const handleModeChange = (nextMode: ComposerMode) => {
     setMode(nextMode);
-    if (nextMode === 'followup') {
-      setMessage(buildFollowUpGreeting(lead));
+    if (nextMode !== 'quote') {
+      setMessage(buildTemplateMessage(lead, nextMode));
     } else if (!selectedPlanId && plans.length > 0) {
       setSelectedPlanId(String(plans[0].id));
     }
+  };
+
+  const logWhatsAppOutreach = () => {
+    if (!logToHistory || !lead) return;
+    const chosenPlan = plans.find((p) => String(p.id) === selectedPlanId);
+    const summaryNote =
+      mode === 'quote' && chosenPlan
+        ? `Sent WhatsApp quotation for ${chosenPlan.name} (${
+            selectedTenure === 'all' ? 'All tenures' : CYCLE_META[selectedTenure].title
+          }).`
+        : mode === 'missed_call'
+          ? 'Call not connected — sent missed-call follow-up on WhatsApp.'
+          : mode === 'renewal'
+            ? 'Sent activation / renewal follow-up on WhatsApp.'
+            : 'Sent WhatsApp follow-up message.';
+
+    apiFetch<LeadItem>(`/api/leads/${lead.id}/remarks`, {
+      method: 'POST',
+      body: JSON.stringify({
+        remark: summaryNote,
+        statusAtCall: lead.status,
+        callDate: getTodayIsoDate(),
+        followUpDate: lead.followUpDate,
+      }),
+    })
+      .then((updated) => {
+        onLeadUpdated?.(updated);
+      })
+      .catch(() => {
+        // Non-blocking outreach log
+      });
   };
 
   const handleAnchorClick = (event: MouseEvent<HTMLAnchorElement>) => {
@@ -145,6 +200,7 @@ export function LeadWhatsAppModal({
       phoneInputRef.current?.focus();
       return;
     }
+    logWhatsAppOutreach();
     onToast('success', `Opening WhatsApp for ${normalized.formattedDisplay}.`);
     setTimeout(() => onClose(), 120);
   };
@@ -192,6 +248,7 @@ export function LeadWhatsAppModal({
               </h3>
               <p className="text-xs text-[#64748B] mt-0.5 font-mono-tabular">
                 {lead.phone}
+                {lead.campaignName ? ` · ${lead.campaignName}` : ''}
               </p>
             </div>
           </div>
@@ -206,34 +263,56 @@ export function LeadWhatsAppModal({
         </div>
 
         <form onSubmit={handleFormSubmit} className="flex-1 overflow-y-auto p-5 space-y-4">
-          {/* Segmented Mode Selector */}
+          {/* Segmented Template & Quote Mode Selector */}
           <div
             role="group"
-            aria-label="Message type"
-            className="grid grid-cols-2 gap-1 p-1 bg-[#F1F5F9] rounded-lg"
+            aria-label="Message template"
+            className="grid grid-cols-2 sm:grid-cols-4 gap-1 p-1 bg-[#F1F5F9] rounded-lg"
           >
             <button
               type="button"
               onClick={() => handleModeChange('followup')}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+              className={`px-2 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer whitespace-nowrap ${
                 mode === 'followup'
                   ? 'bg-white text-[#0F172A] shadow-xs'
                   : 'text-[#64748B] hover:text-[#0F172A]'
               }`}
             >
-              Quick Follow-up Chat
+              Follow-up
+            </button>
+            <button
+              type="button"
+              onClick={() => handleModeChange('missed_call')}
+              className={`px-2 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                mode === 'missed_call'
+                  ? 'bg-white text-[#0F172A] shadow-xs'
+                  : 'text-[#64748B] hover:text-[#0F172A]'
+              }`}
+            >
+              Missed Call
+            </button>
+            <button
+              type="button"
+              onClick={() => handleModeChange('renewal')}
+              className={`px-2 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                mode === 'renewal'
+                  ? 'bg-white text-[#0F172A] shadow-xs'
+                  : 'text-[#64748B] hover:text-[#0F172A]'
+              }`}
+            >
+              Activation
             </button>
             <button
               type="button"
               onClick={() => handleModeChange('quote')}
-              className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+              className={`inline-flex items-center justify-center gap-1 px-2 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer whitespace-nowrap ${
                 mode === 'quote'
                   ? 'bg-white text-[#0F172A] shadow-xs'
                   : 'text-[#64748B] hover:text-[#0F172A]'
               }`}
             >
-              <Server className="w-3.5 h-3.5 text-[#059669]" />
-              <span>Attach Plan Quote</span>
+              <Server className="w-3 h-3 text-[#059669]" />
+              <span>Plan Quote</span>
             </button>
           </div>
 
@@ -343,12 +422,22 @@ export function LeadWhatsAppModal({
             </div>
             <textarea
               id="lead-wa-message"
-              rows={8}
+              rows={7}
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               className="w-full p-3 text-xs font-mono leading-relaxed bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964] resize-y"
             />
           </div>
+
+          <label className="flex items-center gap-2 text-xs text-[#334155] cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={logToHistory}
+              onChange={(e) => setLogToHistory(e.target.checked)}
+              className="w-4 h-4 rounded border-[#CBD5E1] accent-[#17C964] cursor-pointer"
+            />
+            <span>Automatically log this WhatsApp message to client Call History</span>
+          </label>
 
           <div className="pt-3 border-t border-[#E2E8F0] flex flex-wrap items-center justify-between gap-2">
             <button

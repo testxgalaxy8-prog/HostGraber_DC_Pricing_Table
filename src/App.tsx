@@ -25,6 +25,7 @@ import { LoginView } from './components/LoginView.tsx';
 import { ChangePasswordView } from './components/ChangePasswordView.tsx';
 import { PortalView } from './components/PortalView.tsx';
 import { LeadManageView } from './components/leads/LeadManageView.tsx';
+import { LeadReminderCenter } from './components/leads/LeadReminderCenter.tsx';
 import { AdminPanel, type AdminTab } from './components/AdminPanel.tsx';
 import { BrandMark } from './components/BrandMark.tsx';
 import { ToastContainer, type ToastMessage } from './components/Toast.tsx';
@@ -55,6 +56,7 @@ function PortalShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [categoriesOpen, setCategoriesOpen] = useState(true);
+  const [pendingOpenLeadId, setPendingOpenLeadId] = useState<number | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   const addToast = useCallback((type: 'success' | 'error', text: string) => {
@@ -63,6 +65,12 @@ function PortalShell() {
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 3500);
+  }, []);
+
+  const handleOpenLeadFromReminder = useCallback((leadId: number) => {
+    setPendingOpenLeadId(leadId);
+    setView('leads');
+    setMobileSidebarOpen(false);
   }, []);
 
   if (loading) {
@@ -472,6 +480,13 @@ function PortalShell() {
                   <span>{roleLabel}</span>
                 </div>
 
+                {isAdmin && !user.mustChangePassword && (
+                  <LeadReminderCenter
+                    onOpenLead={handleOpenLeadFromReminder}
+                    onToast={addToast}
+                  />
+                )}
+
                 {!user.mustChangePassword && (
                   <button
                     type="button"
@@ -526,7 +541,12 @@ function PortalShell() {
           ) : effectiveView === 'login' ? (
             <LoginView onCancel={() => setView('portal')} />
           ) : effectiveView === 'leads' && user && isAdmin ? (
-            <LeadManageView settings={settings} onToast={addToast} />
+            <LeadManageView
+              settings={settings}
+              openLeadId={pendingOpenLeadId}
+              onOpenedLeadHandled={() => setPendingOpenLeadId(null)}
+              onToast={addToast}
+            />
           ) : effectiveView === 'admin' && user && isAdmin ? (
             <AdminPanel
               user={user}

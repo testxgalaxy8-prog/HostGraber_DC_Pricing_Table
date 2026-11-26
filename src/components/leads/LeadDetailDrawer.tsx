@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import {
   ArrowRightLeft,
   CalendarClock,
+  Clock,
   Edit3,
   MessageCircle,
   Phone,
@@ -14,20 +15,16 @@ import {
   ALL_LEAD_STATUSES,
   LEAD_SOURCE_LABELS,
   LEAD_STATUS_META,
+  addDaysIso,
+  addMinutesToNow,
   formatLeadDisplayDate,
+  formatLeadDisplayTime,
   getFollowUpUrgency,
+  getReminderTimingStatus,
   getTodayIsoDate,
 } from '../../shared/leads.ts';
 import type { LeadItem, LeadStatus } from '../../shared/types.ts';
-
-function addDaysIso(days: number): string {
-  const date = new Date();
-  date.setDate(date.getDate() + days);
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
+import { CallReminderPicker } from './CallReminderPicker.tsx';
 
 export function LeadDetailDrawer({
   leadId,
@@ -56,9 +53,12 @@ export function LeadDetailDrawer({
   const [statusAtCall, setStatusAtCall] = useState<LeadStatus>('call_needed');
   const [callDate, setCallDate] = useState(getTodayIsoDate());
   const [followUpDate, setFollowUpDate] = useState('');
+  const [followUpTime, setFollowUpTime] = useState('');
   const [savingRemark, setSavingRemark] = useState(false);
+  const [updatingReminder, setUpdatingReminder] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
     if (!leadId) {
@@ -73,6 +73,7 @@ export function LeadDetailDrawer({
         setStatusAtCall(detail.status);
         setCallDate(getTodayIsoDate());
         setFollowUpDate(detail.followUpDate || '');
+        setFollowUpTime(detail.followUpTime || '');
         setRemark('');
       })
       .catch((err) => {
@@ -86,6 +87,13 @@ export function LeadDetailDrawer({
   }, [leadId]);
 
   useEffect(() => {
+    if (!leadId || !lead?.followUpTime) return;
+    setNowMs(Date.now());
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [leadId, lead?.followUpTime]);
+
+  useEffect(() => {
     if (!leadId) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
@@ -96,6 +104,13 @@ export function LeadDetailDrawer({
 
   if (!leadId) return null;
 
+  const handleFollowUpDateChange = (nextDate: string) => {
+    setFollowUpDate(nextDate);
+    if (!nextDate) {
+      setFollowUpTime('');
+    }
+  };
+
   const handleAddRemark = async (e: FormEvent) => {
     e.preventDefault();
     if (!lead) return;
@@ -104,6 +119,9 @@ export function LeadDetailDrawer({
       return;
     }
     setSavingRemark(true);
+    const cleanDate = followUpDate.trim() || null;
+    const cleanTime = cleanDate && followUpTime.trim() ? followUpTime.trim() : null;
+
     try {
       const updated = await apiFetch<LeadItem>(`/api/leads/${lead.id}/remarks`, {
         method: 'POST',
@@ -111,13 +129,22 @@ export function LeadDetailDrawer({
           remark: remark.trim(),
           statusAtCall,
           callDate: callDate || getTodayIsoDate(),
-          followUpDate: followUpDate.trim() || null,
+          followUpDate: cleanDate,
+          followUpTime: cleanTime,
         }),
       });
       setLead(updated);
+      setFollowUpDate(updated.followUpDate || '');
+      setFollowUpTime(updated.followUpTime || '');
       setRemark('');
       onLeadUpdated(updated);
-      onToast('success', 'Call remark logged and lead updated.');
+      window.dispatchEvent(new Event('hg-leads-changed'));
+      onToast(
+        'success',
+        cleanDate && cleanTime
+          ? `Call logged & timer set for ${formatLeadDisplayTime(cleanTime)}.`
+          : 'Call remark logged and lead updated.'
+      );
     } catch (err) {
       onToast(
         'error',
@@ -128,12 +155,42 @@ export function LeadDetailDrawer({
     }
   };
 
+  const handleQuickSnooze = async (minutes: number) => {
+    if (!lead) return;
+    setUpdatingReminder(true);
+    try {
+      const next = addMinutesToNow(minutes);
+      const updated = await apiFetch<LeadItem>(`/api/leads/${lead.id}/reminder`, {
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'snooze',
+          followUpDate: next.date,
+          followUpTime: next.time,
+        }),
+      });
+      setLead(updated);
+      setFollowUpDate(updated.followUpDate || '');
+      setFollowUpTime(updated.followUpTime || '');
+      onLeadUpdated(updated);
+      window.dispatchEvent(new Event('hg-leads-changed'));
+      onToast('success', `Reminder snoozed to ${formatLeadDisplayTime(next.time)}.`);
+    } catch (err) {
+      onToast(
+        'error',
+        err instanceof Error ? err.message : 'Failed to snooze reminder.'
+      );
+    } finally {
+      setUpdatingReminder(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!lead) return;
     setDeleting(true);
     try {
       await apiFetch(`/api/leads/${lead.id}`, { method: 'DELETE' });
       onLeadDeleted(lead.id);
+      window.dispatchEvent(new Event('hg-leads-changed'));
       onToast('success', `Deleted lead ${lead.name}.`);
       onClose();
     } catch (err) {
@@ -150,6 +207,7 @@ export function LeadDetailDrawer({
   const urgency = lead
     ? getFollowUpUrgency(lead.followUpDate, lead.status)
     : 'none';
+  const timing = lead ? getReminderTimingStatus(lead, nowMs) : null;
 
   return (
     <div
@@ -197,7 +255,7 @@ export function LeadDetailDrawer({
                   <h3 className="mt-1 text-lg font-bold text-[#0F172A] truncate">
                     {lead.name}
                   </h3>
-                  <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-[#334155] font-mono-tabular">
+                  <div className="mt-1 flex flex-wrap items-center gap-2.5 text-xs text-[#334155] font-mono-tabular">
                     <a
                       href={`tel:+${lead.normalizedPhone}`}
                       className="inline-flex items-center gap-1 font-semibold hover:text-[#059669]"
@@ -210,19 +268,24 @@ export function LeadDetailDrawer({
                       Follow-up:{' '}
                       <strong
                         className={
-                          urgency === 'overdue'
+                          timing?.state === 'due' || urgency === 'overdue'
                             ? 'text-[#DC2626]'
-                            : urgency === 'today'
+                            : timing?.state === 'imminent' || urgency === 'today'
                               ? 'text-[#D97706]'
                               : 'text-[#0F172A]'
                         }
                       >
                         {formatLeadDisplayDate(lead.followUpDate)}
-                        {urgency === 'overdue'
-                          ? ' (Overdue)'
-                          : urgency === 'today'
-                            ? ' (Today)'
-                            : ''}
+                        {lead.followUpTime
+                          ? ` · ${formatLeadDisplayTime(lead.followUpTime)}`
+                          : ''}
+                        {timing && timing.state !== 'none'
+                          ? ` (${timing.label})`
+                          : urgency === 'overdue'
+                            ? ' (Overdue)'
+                            : urgency === 'today'
+                              ? ' (Today)'
+                              : ''}
                       </strong>
                     </span>
                   </div>
@@ -262,6 +325,18 @@ export function LeadDetailDrawer({
                   >
                     <ArrowRightLeft className="w-3.5 h-3.5" />
                     <span>Transfer</span>
+                  </button>
+                )}
+
+                {timing?.state === 'due' && (
+                  <button
+                    type="button"
+                    disabled={updatingReminder}
+                    onClick={() => handleQuickSnooze(15)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-[#B45309] bg-[#FFFBEB] border border-[#FCD34D] hover:bg-[#FEF3C7] rounded-lg cursor-pointer"
+                  >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>Snooze +15m</span>
                   </button>
                 )}
 
@@ -310,7 +385,7 @@ export function LeadDetailDrawer({
                     Log Call Update & Remark
                   </h4>
                   <span className="text-[11px] text-[#64748B]">
-                    Updates lead status & color automatically
+                    Updates lead status & reminder timer
                   </span>
                 </div>
 
@@ -364,14 +439,14 @@ export function LeadDetailDrawer({
                       <div className="flex items-center gap-1 text-[10px]">
                         <button
                           type="button"
-                          onClick={() => setFollowUpDate(addDaysIso(1))}
+                          onClick={() => handleFollowUpDateChange(addDaysIso(1))}
                           className="text-[#059669] hover:underline cursor-pointer"
                         >
                           +1d
                         </button>
                         <button
                           type="button"
-                          onClick={() => setFollowUpDate(addDaysIso(3))}
+                          onClick={() => handleFollowUpDateChange(addDaysIso(3))}
                           className="text-[#059669] hover:underline cursor-pointer"
                         >
                           +3d
@@ -379,7 +454,7 @@ export function LeadDetailDrawer({
                         {followUpDate && (
                           <button
                             type="button"
-                            onClick={() => setFollowUpDate('')}
+                            onClick={() => handleFollowUpDateChange('')}
                             className="text-[#64748B] hover:text-[#0F172A] cursor-pointer"
                           >
                             Clear
@@ -390,17 +465,31 @@ export function LeadDetailDrawer({
                     <input
                       type="date"
                       value={followUpDate}
-                      onChange={(e) => setFollowUpDate(e.target.value)}
+                      onChange={(e) => handleFollowUpDateChange(e.target.value)}
                       className="w-full h-9 px-2.5 text-xs font-mono-tabular bg-white border border-[#CBD5E1] rounded-lg text-[#0F172A]"
                     />
                   </div>
                 </div>
 
-                <div className="flex justify-end">
+                <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-2.5 pt-0.5">
+                  <div className="w-full sm:w-64">
+                    <CallReminderPicker
+                      size="sm"
+                      surface="white"
+                      label="Call Reminder"
+                      followUpDate={followUpDate}
+                      followUpTime={followUpTime}
+                      onChange={(nextDate, nextTime) => {
+                        setFollowUpDate(nextDate);
+                        setFollowUpTime(nextTime);
+                      }}
+                    />
+                  </div>
+
                   <button
                     type="submit"
                     disabled={savingRemark}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] disabled:opacity-60 rounded-lg cursor-pointer"
+                    className="h-9 inline-flex items-center justify-center gap-1.5 px-4 text-xs font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] disabled:opacity-60 rounded-lg cursor-pointer shrink-0"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>{savingRemark ? 'Logging...' : 'Save Call Update'}</span>
@@ -449,6 +538,9 @@ export function LeadDetailDrawer({
                               <CalendarClock className="w-3 h-3" />
                               <span>
                                 Next Follow-up: {formatLeadDisplayDate(entry.followUpDate)}
+                                {entry.followUpTime
+                                  ? ` · ${formatLeadDisplayTime(entry.followUpTime)}`
+                                  : ''}
                               </span>
                             </div>
                           )}

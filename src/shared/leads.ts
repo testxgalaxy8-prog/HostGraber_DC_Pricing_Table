@@ -168,6 +168,176 @@ export function getTodayIsoDate(): string {
   return `${y}-${m}-${d}`;
 }
 
+export function addDaysIso(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export function addMinutesToNow(minutes: number): { date: string; time: string } {
+  const target = new Date(Date.now() + minutes * 60_000);
+  const y = target.getFullYear();
+  const m = String(target.getMonth() + 1).padStart(2, '0');
+  const d = String(target.getDate()).padStart(2, '0');
+  const hh = String(target.getHours()).padStart(2, '0');
+  const mm = String(target.getMinutes()).padStart(2, '0');
+  return {
+    date: `${y}-${m}-${d}`,
+    time: `${hh}:${mm}`,
+  };
+}
+
+export function normalizeFollowUpTimeInput(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const h24 = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(trimmed);
+  if (h24) {
+    const hours = Number(h24[1]);
+    const minutes = Number(h24[2]);
+    if (hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59) {
+      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    }
+    return null;
+  }
+
+  const h12 = /^(\d{1,2}):(\d{2})\s*(am|pm)$/i.exec(trimmed);
+  if (h12) {
+    let hours = Number(h12[1]);
+    const minutes = Number(h12[2]);
+    const period = h12[3].toLowerCase();
+    if (hours >= 1 && hours <= 12 && minutes >= 0 && minutes <= 59) {
+      if (period === 'pm' && hours < 12) hours += 12;
+      if (period === 'am' && hours === 12) hours = 0;
+      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    }
+  }
+
+  return null;
+}
+
+export function formatLeadDisplayTime(timeStr: string | null | undefined): string {
+  const normalized = normalizeFollowUpTimeInput(timeStr);
+  if (!normalized) return '';
+  const [hhRaw, mmRaw] = normalized.split(':');
+  const hh = Number(hhRaw);
+  const mm = Number(mmRaw);
+  const period = hh >= 12 ? 'PM' : 'AM';
+  const hour12 = hh % 12 === 0 ? 12 : hh % 12;
+  return `${String(hour12).padStart(2, '0')}:${String(mm).padStart(2, '0')} ${period}`;
+}
+
+export function parseFollowUpDateTime(
+  followUpDate: string | null | undefined,
+  followUpTime: string | null | undefined
+): Date | null {
+  if (!followUpDate || !followUpTime) return null;
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(followUpDate.trim());
+  const normalizedTime = normalizeFollowUpTimeInput(followUpTime);
+  if (!dateMatch || !normalizedTime) return null;
+
+  const year = Number(dateMatch[1]);
+  const month = Number(dateMatch[2]) - 1;
+  const day = Number(dateMatch[3]);
+  const [hh, mm] = normalizedTime.split(':').map(Number);
+
+  const parsed = new Date(year, month, day, hh, mm, 0, 0);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+}
+
+export type ReminderTimingState =
+  | 'due'
+  | 'imminent'
+  | 'scheduled'
+  | 'acknowledged'
+  | 'none';
+
+export interface ReminderTimingInfo {
+  state: ReminderTimingState;
+  targetMs: number | null;
+  diffMs: number | null;
+  label: string;
+}
+
+export function getReminderTimingStatus(
+  lead: {
+    followUpDate: string | null | undefined;
+    followUpTime?: string | null | undefined;
+    status: LeadStatus;
+    reminderNotifiedAt?: string | null | undefined;
+  },
+  nowMs: number = Date.now()
+): ReminderTimingInfo {
+  if (
+    lead.status === 'deny' ||
+    lead.status === 'converted' ||
+    lead.status === 'not_required'
+  ) {
+    return { state: 'none', targetMs: null, diffMs: null, label: '' };
+  }
+
+  const targetDate = parseFollowUpDateTime(lead.followUpDate, lead.followUpTime);
+  if (!targetDate) {
+    return { state: 'none', targetMs: null, diffMs: null, label: '' };
+  }
+
+  const targetMs = targetDate.getTime();
+  const diffMs = targetMs - nowMs;
+
+  if (diffMs <= 0) {
+    const absSec = Math.floor(Math.abs(diffMs) / 1000);
+    let overdueLabel = 'Due now';
+    if (absSec >= 86400) {
+      const days = Math.floor(absSec / 86400);
+      overdueLabel = `${days}d overdue`;
+    } else if (absSec >= 3600) {
+      const hrs = Math.floor(absSec / 3600);
+      const mins = Math.floor((absSec % 3600) / 60);
+      overdueLabel = mins > 0 ? `${hrs}h ${mins}m overdue` : `${hrs}h overdue`;
+    } else if (absSec >= 60) {
+      const mins = Math.floor(absSec / 60);
+      overdueLabel = `${mins}m overdue`;
+    }
+
+    return {
+      state: lead.reminderNotifiedAt ? 'acknowledged' : 'due',
+      targetMs,
+      diffMs,
+      label: overdueLabel,
+    };
+  }
+
+  const totalSec = Math.ceil(diffMs / 1000);
+  let label = '';
+  if (totalSec < 60) {
+    label = `in ${totalSec}s`;
+  } else if (totalSec < 3600) {
+    const mins = Math.floor(totalSec / 60);
+    const secs = totalSec % 60;
+    label = `in ${mins}m ${String(secs).padStart(2, '0')}s`;
+  } else if (totalSec < 86400) {
+    const hrs = Math.floor(totalSec / 3600);
+    const mins = Math.floor((totalSec % 3600) / 60);
+    label = mins > 0 ? `in ${hrs}h ${mins}m` : `in ${hrs}h`;
+  } else {
+    const days = Math.floor(totalSec / 86400);
+    const hrs = Math.floor((totalSec % 86400) / 3600);
+    label = hrs > 0 ? `in ${days}d ${hrs}h` : `in ${days}d`;
+  }
+
+  return {
+    state: diffMs <= 15 * 60_000 ? 'imminent' : 'scheduled',
+    targetMs,
+    diffMs,
+    label,
+  };
+}
+
 export function normalizeIsoDateInput(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const trimmed = raw.trim();

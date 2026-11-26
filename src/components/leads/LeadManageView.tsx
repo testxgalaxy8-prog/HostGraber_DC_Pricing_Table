@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ArrowRightLeft,
   CalendarClock,
+  Clock,
   Download,
   Edit3,
   FileSpreadsheet,
@@ -34,7 +35,9 @@ import {
   LEAD_STATUS_META,
   computeLeadMetrics,
   formatLeadDisplayDate,
+  formatLeadDisplayTime,
   getFollowUpUrgency,
+  getReminderTimingStatus,
   getTodayIsoDate,
 } from '../../shared/leads.ts';
 import type {
@@ -67,9 +70,13 @@ type SortOption = 'updated' | 'follow_up' | 'lead_date' | 'name';
 
 export function LeadManageView({
   settings,
+  openLeadId = null,
+  onOpenedLeadHandled,
   onToast,
 }: {
   settings: PortalSettings;
+  openLeadId?: number | null;
+  onOpenedLeadHandled?: () => void;
   onToast: (type: 'success' | 'error', text: string) => void;
 }) {
   const { user, refreshSession } = useAuth();
@@ -115,6 +122,7 @@ export function LeadManageView({
 
   const [transferModalOpen, setTransferModalOpen] = useState(false);
   const [transferLeadsSubset, setTransferLeadsSubset] = useState<LeadItem[]>([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const loadColleagues = useCallback(async () => {
     try {
@@ -178,8 +186,42 @@ export function LeadManageView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (openLeadId) {
+      setDrawerLeadId(openLeadId);
+      onOpenedLeadHandled?.();
+    }
+  }, [openLeadId, onOpenedLeadHandled]);
+
+  const hasTimedReminders = useMemo(
+    () => leads.some((l) => Boolean(l.followUpDate && l.followUpTime)),
+    [leads]
+  );
+
+  useEffect(() => {
+    if (!hasTimedReminders) return;
+    setNowMs(Date.now());
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [hasTimedReminders]);
+
+  useEffect(() => {
+    const onReminderUpdated = (event: Event) => {
+      const custom = event as CustomEvent<LeadItem | undefined>;
+      if (custom.detail && custom.detail.id) {
+        const updated = custom.detail;
+        setLeads((prev) =>
+          prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item))
+        );
+      }
+    };
+    window.addEventListener('hg-reminder-updated', onReminderUpdated);
+    return () => window.removeEventListener('hg-reminder-updated', onReminderUpdated);
+  }, []);
+
   const refreshWorkspace = useCallback(async () => {
     await Promise.all([loadColleagues(), loadLeads()]);
+    window.dispatchEvent(new Event('hg-leads-changed'));
   }, [loadColleagues, loadLeads]);
 
   const handleSelectScope = async (
@@ -317,8 +359,8 @@ export function LeadManageView({
       sorted.sort((a, b) => (b.leadDate || '').localeCompare(a.leadDate || ''));
     } else if (sortBy === 'follow_up') {
       sorted.sort((a, b) => {
-        const da = a.followUpDate || '9999-12-31';
-        const db = b.followUpDate || '9999-12-31';
+        const da = `${a.followUpDate || '9999-12-31'} ${a.followUpTime || '23:59'}`;
+        const db = `${b.followUpDate || '9999-12-31'} ${b.followUpTime || '23:59'}`;
         return da.localeCompare(db);
       });
     }
@@ -410,6 +452,7 @@ export function LeadManageView({
         );
       }
       setFormOpen(false);
+      window.dispatchEvent(new Event('hg-leads-changed'));
     } finally {
       setSavingForm(false);
     }
@@ -434,6 +477,7 @@ export function LeadManageView({
       setLeads((prev) =>
         prev.map((item) => (item.id === updated.id ? updated : item))
       );
+      window.dispatchEvent(new Event('hg-leads-changed'));
       onToast(
         'success',
         `${lead.name} marked as ${LEAD_STATUS_META[nextStatus].label}.`
@@ -458,6 +502,7 @@ export function LeadManageView({
       setSelectedIds((prev) => prev.filter((id) => id !== lead.id));
       setConfirmRowDeleteId(null);
       await loadColleagues();
+      window.dispatchEvent(new Event('hg-leads-changed'));
       onToast('success', `Deleted lead ${lead.name}.`);
     } catch (err) {
       onToast(
@@ -483,6 +528,7 @@ export function LeadManageView({
       setSelectedIds([]);
       setConfirmBulkDelete(false);
       await loadColleagues();
+      window.dispatchEvent(new Event('hg-leads-changed'));
       onToast('success', `Deleted ${res.deletedCount} selected leads.`);
     } catch (err) {
       onToast(
@@ -1229,31 +1275,55 @@ export function LeadManageView({
                         </td>
 
                         <td className="py-3 px-2.5 align-top whitespace-nowrap text-xs font-mono-tabular">
-                          {lead.followUpDate ? (
-                            <div>
-                              <span
-                                className={
-                                  urgency === 'overdue'
-                                    ? 'font-semibold text-[#B91C1C]'
-                                    : urgency === 'today'
-                                      ? 'font-semibold text-[#B45309]'
-                                      : 'text-[#0F172A] font-medium'
-                                }
-                              >
-                                {formatLeadDisplayDate(lead.followUpDate)}
-                              </span>
-                              {urgency === 'overdue' && (
-                                <div className="text-[10px] font-sans font-semibold text-[#DC2626] mt-0.5">
-                                  Overdue
-                                </div>
-                              )}
-                              {urgency === 'today' && (
-                                <div className="text-[10px] font-sans font-semibold text-[#D97706] mt-0.5">
-                                  Due Today
-                                </div>
-                              )}
-                            </div>
-                          ) : (
+                          {lead.followUpDate ? (() => {
+                            const timing = getReminderTimingStatus(lead, nowMs);
+                            return (
+                              <div>
+                                <span
+                                  className={
+                                    timing.state === 'due' || urgency === 'overdue'
+                                      ? 'font-semibold text-[#B91C1C]'
+                                      : timing.state === 'imminent' || urgency === 'today'
+                                        ? 'font-semibold text-[#B45309]'
+                                        : 'text-[#0F172A] font-medium'
+                                  }
+                                >
+                                  {formatLeadDisplayDate(lead.followUpDate)}
+                                </span>
+                                {lead.followUpTime && (
+                                  <div
+                                    className={`mt-0.5 inline-flex items-center gap-1 text-[10px] font-mono-tabular font-semibold ${
+                                      timing.state === 'due'
+                                        ? 'text-[#DC2626]'
+                                        : timing.state === 'imminent'
+                                          ? 'text-[#D97706]'
+                                          : timing.state === 'scheduled'
+                                            ? 'text-[#059669]'
+                                            : 'text-[#64748B]'
+                                    }`}
+                                  >
+                                    <Clock className="w-3 h-3 shrink-0" />
+                                    <span>
+                                      {formatLeadDisplayTime(lead.followUpTime)}
+                                      {timing.state !== 'none' && timing.label
+                                        ? ` · ${timing.label}`
+                                        : ''}
+                                    </span>
+                                  </div>
+                                )}
+                                {!lead.followUpTime && urgency === 'overdue' && (
+                                  <div className="text-[10px] font-sans font-semibold text-[#DC2626] mt-0.5">
+                                    Overdue
+                                  </div>
+                                )}
+                                {!lead.followUpTime && urgency === 'today' && (
+                                  <div className="text-[10px] font-sans font-semibold text-[#D97706] mt-0.5">
+                                    Due Today
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })() : (
                             <span className="text-[#94A3B8]">—</span>
                           )}
                         </td>
@@ -1415,22 +1485,32 @@ export function LeadManageView({
                     <span>Call: {formatLeadDisplayDate(lead.leadDate)}</span>
                     <span>
                       Follow-up:{' '}
-                      <strong
-                        className={
-                          urgency === 'overdue'
-                            ? 'text-[#B91C1C]'
-                            : urgency === 'today'
-                              ? 'text-[#B45309]'
-                              : 'text-[#0F172A]'
-                        }
-                      >
-                        {formatLeadDisplayDate(lead.followUpDate)}
-                        {urgency === 'overdue'
-                          ? ' (Overdue)'
-                          : urgency === 'today'
-                            ? ' (Today)'
-                            : ''}
-                      </strong>
+                      {(() => {
+                        const timing = getReminderTimingStatus(lead, nowMs);
+                        return (
+                          <strong
+                            className={
+                              timing.state === 'due' || urgency === 'overdue'
+                                ? 'text-[#B91C1C]'
+                                : timing.state === 'imminent' || urgency === 'today'
+                                  ? 'text-[#B45309]'
+                                  : 'text-[#0F172A]'
+                            }
+                          >
+                            {formatLeadDisplayDate(lead.followUpDate)}
+                            {lead.followUpTime
+                              ? ` · ${formatLeadDisplayTime(lead.followUpTime)}`
+                              : ''}
+                            {timing.state !== 'none' && timing.label
+                              ? ` (${timing.label})`
+                              : urgency === 'overdue'
+                                ? ' (Overdue)'
+                                : urgency === 'today'
+                                  ? ' (Today)'
+                                  : ''}
+                          </strong>
+                        );
+                      })()}
                     </span>
                   </div>
 
