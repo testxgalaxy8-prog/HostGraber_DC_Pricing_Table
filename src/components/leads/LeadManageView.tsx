@@ -1141,7 +1141,7 @@ export function LeadManageView({
               <table className="w-full text-left border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-xs font-semibold text-[#64748B]">
-                    <th className="py-2.5 pl-3.5 pr-1.5 w-8">
+                    <th className="py-2.5 pl-3 pr-1 w-7">
                       <input
                         type="checkbox"
                         checked={allFilteredSelected}
@@ -1150,16 +1150,16 @@ export function LeadManageView({
                         className="w-4 h-4 rounded border-[#CBD5E1] accent-[#17C964] cursor-pointer"
                       />
                     </th>
-                    <th className="py-2.5 px-2.5 whitespace-nowrap">Client</th>
+                    <th className="py-2.5 px-2 whitespace-nowrap">Client</th>
                     {showOwnerColumn && (
-                      <th className="py-2.5 px-2.5 whitespace-nowrap">Owner</th>
+                      <th className="py-2.5 px-2 whitespace-nowrap">Owner</th>
                     )}
-                    <th className="py-2.5 px-2.5 whitespace-nowrap">Mobile Number</th>
-                    <th className="py-2.5 px-2.5 whitespace-nowrap">Lead Status</th>
-                    <th className="py-2.5 px-2.5 whitespace-nowrap">Latest Call Remark</th>
-                    <th className="py-2.5 px-2.5 whitespace-nowrap">Call Date</th>
-                    <th className="py-2.5 px-2.5 whitespace-nowrap">Follow-up Date</th>
-                    <th className="py-2.5 pl-2 pr-3.5 text-right whitespace-nowrap">Actions</th>
+                    <th className="py-2.5 px-2 whitespace-nowrap">Mobile Number</th>
+                    <th className="py-2.5 px-2 whitespace-nowrap">Lead Status</th>
+                    <th className="py-2.5 px-2 whitespace-nowrap">Latest Call Remark</th>
+                    <th className="py-2.5 px-2 whitespace-nowrap">Call Date</th>
+                    <th className="py-2.5 px-2 whitespace-nowrap">Follow-up Date</th>
+                    <th className="py-2.5 pl-1.5 pr-3 text-right whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E2E8F0]">
@@ -1177,7 +1177,7 @@ export function LeadManageView({
                         key={lead.id}
                         className={`transition-colors ${meta.rowBgClass}`}
                       >
-                        <td className="py-3 pl-3.5 pr-1.5 align-top">
+                        <td className="py-3 pl-3 pr-1 align-top">
                           <input
                             type="checkbox"
                             checked={selectedSet.has(lead.id)}
@@ -1187,7 +1187,7 @@ export function LeadManageView({
                           />
                         </td>
 
-                        <td className="py-3 px-2.5 align-top min-w-[130px] max-w-[190px]">
+                        <td className="py-3 px-2 align-top min-w-[115px] max-w-[165px]">
                           <button
                             type="button"
                             onClick={() => setDrawerLeadId(lead.id)}
@@ -1204,14 +1204,14 @@ export function LeadManageView({
                         </td>
 
                         {showOwnerColumn && (
-                          <td className="py-3 px-2.5 align-top whitespace-nowrap text-xs font-medium text-[#334155]">
+                          <td className="py-3 px-2 align-top whitespace-nowrap text-xs font-medium text-[#334155]">
                             {lead.ownerUserId === currentUserId
                               ? `${lead.ownerName} (Me)`
                               : lead.ownerName}
                           </td>
                         )}
 
-                        <td className="py-3 px-2.5 align-top whitespace-nowrap">
+                        <td className="py-3 px-2 align-top whitespace-nowrap">
                           <a
                             href={`tel:+${lead.normalizedPhone}`}
                             className="inline-flex items-center gap-1 text-xs font-mono-tabular font-semibold text-[#0F172A] hover:text-[#059669]"
@@ -1221,7 +1221,7 @@ export function LeadManageView({
                           </a>
                         </td>
 
-                        <td className="py-3 px-2.5 align-top whitespace-nowrap">
+                        <td className="py-3 px-2 align-top whitespace-nowrap">
                           <select
                             value={lead.status}
                             onChange={(e) =>
@@ -1245,7 +1245,7 @@ export function LeadManageView({
                           </select>
                         </td>
 
-                        <td className="py-3 px-2.5 align-top min-w-[150px] max-w-[230px]">
+                        <td className="py-3 px-2 align-top min-w-[135px] max-w-[195px]">
                           <button
                             type="button"
                             onClick={() => setDrawerLeadId(lead.id)}
@@ -1270,16 +1270,16 @@ export function LeadManageView({
                           </button>
                         </td>
 
-                        <td className="py-3 px-2.5 align-top whitespace-nowrap text-xs font-mono-tabular text-[#334155]">
+                        <td className="py-3 px-2 align-top whitespace-nowrap text-xs font-mono-tabular text-[#334155]">
                           {formatLeadDisplayDate(lead.leadDate)}
                         </td>
 
-                        <td className="py-3 px-2.5 align-top whitespace-nowrap text-xs font-mono-tabular">
+                        <td className="py-3 px-2 align-top whitespace-nowrap text-xs font-mono-tabular">
                           {lead.followUpDate ? (() => {
                             const timing = getReminderTimingStatus(lead, nowMs);
                             return (
-                              <div>
-                                <span
+                              <div className="space-y-0.5">
+                                <div
                                   className={
                                     timing.state === 'due' || urgency === 'overdue'
                                       ? 'font-semibold text-[#B91C1C]'
@@ -1289,10 +1289,10 @@ export function LeadManageView({
                                   }
                                 >
                                   {formatLeadDisplayDate(lead.followUpDate)}
-                                </span>
+                                </div>
                                 {lead.followUpTime && (
                                   <div
-                                    className={`mt-0.5 inline-flex items-center gap-1 text-[10px] font-mono-tabular font-semibold ${
+                                    className={`flex items-center gap-1 text-[10px] font-mono-tabular font-semibold ${
                                       timing.state === 'due'
                                         ? 'text-[#DC2626]'
                                         : timing.state === 'imminent'
@@ -1312,12 +1312,12 @@ export function LeadManageView({
                                   </div>
                                 )}
                                 {!lead.followUpTime && urgency === 'overdue' && (
-                                  <div className="text-[10px] font-sans font-semibold text-[#DC2626] mt-0.5">
+                                  <div className="text-[10px] font-sans font-semibold text-[#DC2626]">
                                     Overdue
                                   </div>
                                 )}
                                 {!lead.followUpTime && urgency === 'today' && (
-                                  <div className="text-[10px] font-sans font-semibold text-[#D97706] mt-0.5">
+                                  <div className="text-[10px] font-sans font-semibold text-[#D97706]">
                                     Due Today
                                   </div>
                                 )}
@@ -1328,7 +1328,7 @@ export function LeadManageView({
                           )}
                         </td>
 
-                        <td className="py-3 pl-2 pr-3.5 align-top text-right whitespace-nowrap">
+                        <td className="py-3 pl-1.5 pr-3 align-top text-right whitespace-nowrap">
                           {isDeletingThis ? (
                             <div className="inline-flex items-center gap-1.5 bg-white border border-[#FCA5A5] rounded-lg px-2 py-1 text-xs">
                               <span className="text-[#B91C1C] font-medium">
@@ -1350,13 +1350,13 @@ export function LeadManageView({
                               </button>
                             </div>
                           ) : (
-                            <div className="inline-flex items-center gap-1.5">
+                            <div className="inline-flex items-center gap-1">
                               <button
                                 type="button"
                                 onClick={() => setWhatsAppLead(lead)}
                                 title="Send WhatsApp or Plan Quote"
                                 aria-label={`WhatsApp ${lead.name}`}
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-[#047857] bg-white border border-[#A7F3D0] hover:bg-[#ECFDF5] rounded-lg cursor-pointer"
+                                className="inline-flex items-center gap-1 px-2 py-1.5 text-xs font-semibold text-[#047857] bg-white border border-[#A7F3D0] hover:bg-[#ECFDF5] rounded-lg cursor-pointer"
                               >
                                 <MessageCircle className="w-3.5 h-3.5 shrink-0" />
                                 <span>WhatsApp</span>
@@ -1365,7 +1365,7 @@ export function LeadManageView({
                                 type="button"
                                 onClick={() => setDrawerLeadId(lead.id)}
                                 title="Log call remark & history"
-                                className="px-2.5 py-1.5 text-xs font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] rounded-lg cursor-pointer"
+                                className="px-2 py-1.5 text-xs font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] rounded-lg cursor-pointer"
                               >
                                 Call Log
                               </button>
