@@ -15,6 +15,7 @@ import { apiFetch } from '../../lib/api.ts';
 import {
   canUseBrowserNotifications,
   getBrowserNotificationPermission,
+  isEmbeddedIframe,
   playReminderChime,
   requestBrowserNotificationPermission,
   showBrowserReminderNotification,
@@ -60,6 +61,7 @@ export function LeadReminderCenter({
     NotificationPermission | 'unsupported'
   >(() => getBrowserNotificationPermission());
   const [floatingQueue, setFloatingQueue] = useState<LeadItem[]>([]);
+  const [testPopupVisible, setTestPopupVisible] = useState(false);
   const [busyLeadId, setBusyLeadId] = useState<number | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -85,11 +87,16 @@ export function LeadReminderCenter({
     const onLeadsChanged = () => {
       void fetchReminders();
     };
+    const onPermissionChanged = () => {
+      setNotifPermission(getBrowserNotificationPermission());
+    };
     window.addEventListener('hg-leads-changed', onLeadsChanged);
+    window.addEventListener('hg-notif-permission-changed', onPermissionChanged);
 
     return () => {
       window.clearInterval(pollId);
       window.removeEventListener('hg-leads-changed', onLeadsChanged);
+      window.removeEventListener('hg-notif-permission-changed', onPermissionChanged);
     };
   }, [fetchReminders]);
 
@@ -187,18 +194,17 @@ export function LeadReminderCenter({
       playReminderChime();
     }
 
-    const first = newlyDue[0];
-    showBrowserReminderNotification({
-      title:
-        newlyDue.length === 1
-          ? `Call Reminder: ${first.name}`
-          : `${newlyDue.length} Call Reminders Due`,
-      body: `${first.phone} · ${formatLeadDisplayTime(first.followUpTime)}${
-        first.latestRemark ? ` — ${first.latestRemark}` : ''
-      }`,
-      tag: `lead-reminder-${first.id}-${first.followUpDate}-${first.followUpTime}`,
-      onClick: () => onOpenLead(first.id),
-    });
+    for (const item of newlyDue.slice(0, 3)) {
+      showBrowserReminderNotification({
+        title: `Call Reminder: ${item.name}`,
+        body: `${item.phone} · ${formatLeadDisplayTime(item.followUpTime)}${
+          item.latestRemark ? ` — ${item.latestRemark}` : ''
+        }`,
+        tag: `lead-reminder-${item.id}-${item.followUpDate}-${item.followUpTime}`,
+        requireInteraction: true,
+        onClick: () => onOpenLead(item.id),
+      });
+    }
   }, [dueTimed, onOpenLead]);
 
   // Keep floating alerts synced or prune alerts that were resolved/rescheduled
@@ -293,11 +299,37 @@ export function LeadReminderCenter({
     }
   };
 
-  const handleTestAlert = () => {
+  const handleTestAlert = async () => {
     if (soundEnabled) {
       playReminderChime();
     }
-    onToast('success', 'Reminder sound & notification system is active.');
+    setTestPopupVisible(true);
+
+    let currentPerm = getBrowserNotificationPermission();
+    if (currentPerm === 'default') {
+      currentPerm = await requestBrowserNotificationPermission();
+      setNotifPermission(currentPerm);
+    }
+
+    if (currentPerm === 'granted') {
+      const sent = showBrowserReminderNotification({
+        title: 'HostGraber CRM · Test Call Reminder',
+        body: 'Desktop popup notifications are working! You will receive alerts even when this tab is minimized.',
+        tag: `hg-test-reminder-${Date.now()}`,
+        requireInteraction: false,
+      });
+      if (sent) {
+        onToast('success', 'Desktop popup & sound chime sent!');
+        return;
+      }
+    }
+
+    onToast(
+      'success',
+      isEmbeddedIframe() && currentPerm !== 'granted'
+        ? 'In-app popup shown. Open in a full browser tab for OS desktop popups.'
+        : 'In-app reminder popup & chime tested.'
+    );
   };
 
   const nextUpcoming = upcomingTimed[0] ?? null;
@@ -418,10 +450,19 @@ export function LeadReminderCenter({
               </div>
             </div>
 
+            {canUseBrowserNotifications() && notifPermission === 'granted' && (
+              <div className="px-4 py-1.5 bg-[#ECFDF5] border-b border-[#A7F3D0] flex items-center justify-between gap-2 text-[11px] text-[#065F46]">
+                <span className="font-medium inline-flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#17C964]" />
+                  Desktop OS popup notifications active
+                </span>
+              </div>
+            )}
+
             {canUseBrowserNotifications() && notifPermission === 'default' && (
               <div className="px-4 py-2 bg-[#FFFBEB] border-b border-[#FDE68A] flex items-center justify-between gap-2 text-[11px]">
                 <span className="text-[#92400E] font-medium">
-                  Enable desktop alerts even when tab is minimized
+                  Enable desktop popup alerts even when tab is minimized
                 </span>
                 <button
                   type="button"
@@ -430,6 +471,26 @@ export function LeadReminderCenter({
                 >
                   Allow
                 </button>
+              </div>
+            )}
+
+            {canUseBrowserNotifications() && notifPermission === 'denied' && (
+              <div className="px-4 py-2 bg-[#FEF2F2] border-b border-[#FECACA] flex items-center justify-between gap-2 text-[11px]">
+                <span className="text-[#991B1B] font-medium">
+                  {isEmbeddedIframe()
+                    ? 'Preview iframe blocks OS popups. Open in a full browser tab for desktop popups.'
+                    : 'Desktop popups blocked in browser settings — allow Notifications for this site.'}
+                </span>
+                {isEmbeddedIframe() && (
+                  <a
+                    href={window.location.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2 py-1 font-semibold text-[#991B1B] bg-white border border-[#FCA5A5] hover:bg-[#FEF2F2] rounded-md shrink-0"
+                  >
+                    Open Tab
+                  </a>
+                )}
               </div>
             )}
 
@@ -634,12 +695,53 @@ export function LeadReminderCenter({
       </div>
 
       {/* Floating Call Reminder Alert Pop-up Stack (Top-Right below header) */}
-      {floatingQueue.length > 0 && (
+      {(floatingQueue.length > 0 || testPopupVisible) && (
         <div
-          className="fixed top-20 right-4 sm:right-6 z-40 w-[min(380px,calc(100vw-2rem))] space-y-2.5"
+          className="fixed top-20 right-4 sm:right-6 z-[65] w-[min(380px,calc(100vw-2rem))] space-y-2.5"
           role="alert"
           aria-live="assertive"
         >
+          {testPopupVisible && (
+            <div className="bg-white border-2 border-[#17C964] rounded-2xl shadow-2xl overflow-hidden">
+              <div className="px-3.5 py-2.5 bg-[#ECFDF5] border-b border-[#A7F3D0] flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-7 h-7 rounded-lg bg-[#17C964] text-[#04120A] flex items-center justify-center shrink-0">
+                    <BellRing className="w-4 h-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-[#065F46] truncate">
+                      Test Call Reminder Popup
+                    </div>
+                    <div className="text-[11px] font-mono-tabular text-[#047857]">
+                      Live Alert Active
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTestPopupVisible(false)}
+                  aria-label="Close test popup"
+                  className="p-1 text-[#047857] hover:bg-white/70 rounded-md cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="p-3.5 flex items-center justify-between gap-2 text-xs text-[#334155]">
+                <span>
+                  {notifPermission === 'granted'
+                    ? 'Desktop OS popup & floating alert are both enabled.'
+                    : 'Floating CRM alert is active. Allow browser notifications for OS desktop popups.'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setTestPopupVisible(false)}
+                  className="px-2.5 py-1 text-[11px] font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] rounded-lg cursor-pointer shrink-0"
+                >
+                  Got it
+                </button>
+              </div>
+            </div>
+          )}
           {floatingQueue.slice(0, 3).map((lead) => {
             const meta = LEAD_STATUS_META[lead.status];
             const timing = getReminderTimingStatus(lead, nowMs);

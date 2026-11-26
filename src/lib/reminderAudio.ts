@@ -52,6 +52,15 @@ export function playReminderChime(): void {
   }
 }
 
+export function isEmbeddedIframe(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+}
+
 export function canUseBrowserNotifications(): boolean {
   return typeof window !== 'undefined' && 'Notification' in window;
 }
@@ -72,9 +81,11 @@ export async function requestBrowserNotificationPermission(): Promise<
 > {
   if (!canUseBrowserNotifications()) return 'unsupported';
   try {
-    return await Notification.requestPermission();
+    const result = await Notification.requestPermission();
+    window.dispatchEvent(new Event('hg-notif-permission-changed'));
+    return result;
   } catch {
-    return 'unsupported';
+    return getBrowserNotificationPermission();
   }
 }
 
@@ -82,28 +93,29 @@ export function showBrowserReminderNotification(options: {
   title: string;
   body: string;
   tag: string;
+  requireInteraction?: boolean;
   onClick?: () => void;
-}): void {
-  if (!canUseBrowserNotifications()) return;
+}): boolean {
+  if (!canUseBrowserNotifications()) return false;
   try {
-    if (Notification.permission !== 'granted') return;
+    if (Notification.permission !== 'granted') return false;
     const n = new Notification(options.title, {
       body: options.body,
       tag: options.tag,
-      requireInteraction: false,
+      icon: '/favicon.ico',
+      requireInteraction: options.requireInteraction ?? true,
     });
-    if (options.onClick) {
-      n.onclick = () => {
-        try {
-          window.focus();
-        } catch {
-          // ignore
-        }
-        options.onClick?.();
-        n.close();
-      };
-    }
+    n.onclick = () => {
+      try {
+        window.focus();
+      } catch {
+        // ignore
+      }
+      options.onClick?.();
+      n.close();
+    };
+    return true;
   } catch {
-    // Ignore iframe or browser notification restrictions
+    return false;
   }
 }

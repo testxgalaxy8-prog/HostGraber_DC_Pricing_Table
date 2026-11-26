@@ -14,6 +14,10 @@ import {
   getTodayIsoDate,
   normalizeFollowUpTimeInput,
 } from '../../shared/leads.ts';
+import {
+  getBrowserNotificationPermission,
+  requestBrowserNotificationPermission,
+} from '../../lib/reminderAudio.ts';
 
 const QUICK_TIMERS = [
   { label: '15 min', short: '+15m', minutes: 15 },
@@ -152,18 +156,27 @@ export function CallReminderPicker({
     };
   }, [open]);
 
+  const maybeRequestDesktopAlerts = () => {
+    if (getBrowserNotificationPermission() === 'default') {
+      void requestBrowserNotificationPermission();
+    }
+  };
+
   const applyQuickMinutes = (minutes: number) => {
+    maybeRequestDesktopAlerts();
     const next = addMinutesToNow(minutes);
     onChange(next.date, next.time);
     setOpen(false);
   };
 
   const applySlot = (time24: string) => {
+    maybeRequestDesktopAlerts();
     onChange(followUpDate || getTodayIsoDate(), time24);
     setOpen(false);
   };
 
   const applyCustomTime = () => {
+    maybeRequestDesktopAlerts();
     const time24 = joinTimeParts(hour12, minute, period);
     onChange(followUpDate || getTodayIsoDate(), time24);
     setOpen(false);
