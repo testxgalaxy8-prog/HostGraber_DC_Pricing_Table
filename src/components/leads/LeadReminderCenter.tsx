@@ -4,6 +4,7 @@ import {
   BellOff,
   BellRing,
   Check,
+  ChevronRight,
   Clock,
   ExternalLink,
   Phone,
@@ -519,26 +520,36 @@ export function LeadReminderCenter({
                       {dueTimed.map(({ lead, timing }) => (
                         <div
                           key={lead.id}
-                          className="p-2.5 rounded-xl bg-white border border-[#FCA5A5] space-y-2"
+                          className="p-2.5 rounded-xl bg-white border border-[#FCA5A5] hover:border-[#EF4444] transition-colors space-y-2"
                         >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="text-xs font-semibold text-[#0F172A] truncate">
-                                {lead.name}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpen(false);
+                              onOpenLead(lead.id);
+                            }}
+                            title={`Open ${lead.name} call log`}
+                            className="w-full text-left space-y-1.5 cursor-pointer group"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="text-xs font-semibold text-[#0F172A] group-hover:text-[#059669] group-hover:underline truncate">
+                                  {lead.name}
+                                </div>
+                                <div className="text-[11px] font-mono-tabular text-[#475569]">
+                                  {lead.phone} · {formatLeadDisplayTime(lead.followUpTime)}
+                                </div>
                               </div>
-                              <div className="text-[11px] font-mono-tabular text-[#475569]">
-                                {lead.phone} · {formatLeadDisplayTime(lead.followUpTime)}
-                              </div>
+                              <span className="px-1.5 py-0.5 text-[10px] font-semibold font-mono-tabular text-[#B91C1C] bg-[#FEF2F2] border border-[#FCA5A5] rounded shrink-0">
+                                {timing.label}
+                              </span>
                             </div>
-                            <span className="px-1.5 py-0.5 text-[10px] font-semibold font-mono-tabular text-[#B91C1C] bg-[#FEF2F2] border border-[#FCA5A5] rounded shrink-0">
-                              {timing.label}
-                            </span>
-                          </div>
-                          {lead.latestRemark && (
-                            <p className="text-[11px] text-[#475569] line-clamp-2">
-                              {lead.latestRemark}
-                            </p>
-                          )}
+                            {lead.latestRemark && (
+                              <p className="text-[11px] text-[#475569] line-clamp-2">
+                                {lead.latestRemark}
+                              </p>
+                            )}
+                          </button>
                           <div className="flex flex-wrap items-center gap-1.5">
                             <a
                               href={`tel:+${lead.normalizedPhone}`}
@@ -600,24 +611,25 @@ export function LeadReminderCenter({
                       {upcomingTimed.map(({ lead, timing }) => (
                         <div
                           key={lead.id}
-                          className="p-2.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between gap-2"
+                          className="p-2.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] hover:border-[#17C964] hover:bg-[#ECFDF5]/40 transition-colors flex items-center justify-between gap-2"
                         >
-                          <div className="min-w-0">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setOpen(false);
-                                onOpenLead(lead.id);
-                              }}
-                              className="text-xs font-semibold text-[#0F172A] hover:text-[#059669] hover:underline truncate block text-left cursor-pointer"
-                            >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpen(false);
+                              onOpenLead(lead.id);
+                            }}
+                            title={`Open ${lead.name} call log`}
+                            className="flex-1 min-w-0 text-left cursor-pointer group"
+                          >
+                            <div className="text-xs font-semibold text-[#0F172A] group-hover:text-[#059669] group-hover:underline truncate">
                               {lead.name}
-                            </button>
+                            </div>
                             <div className="text-[11px] font-mono-tabular text-[#64748B]">
                               {formatLeadDisplayDate(lead.followUpDate)} ·{' '}
                               {formatLeadDisplayTime(lead.followUpTime)}
                             </div>
-                          </div>
+                          </button>
                           <div className="flex items-center gap-1.5 shrink-0">
                             <span
                               className={`px-2 py-0.5 text-[11px] font-semibold font-mono-tabular rounded-md border ${
@@ -647,42 +659,44 @@ export function LeadReminderCenter({
                       <div className="text-[11px] font-semibold text-[#475569]">
                         Today &amp; Overdue Follow-ups (No Timer Set · {dateOnlyDue.length})
                       </div>
-                      {dateOnlyDue.slice(0, 6).map((lead) => {
+                      {dateOnlyDue.map((lead) => {
                         const urgency = getFollowUpUrgency(
                           lead.followUpDate,
                           lead.status,
                           todayStr
                         );
                         return (
-                          <div
+                          <button
                             key={lead.id}
-                            className="px-2.5 py-2 rounded-lg bg-white border border-[#E2E8F0] flex items-center justify-between gap-2"
+                            type="button"
+                            onClick={() => {
+                              setOpen(false);
+                              onOpenLead(lead.id);
+                            }}
+                            title={`Open ${lead.name} call log`}
+                            className="w-full text-left px-2.5 py-2 rounded-lg bg-white border border-[#E2E8F0] hover:border-[#17C964] hover:bg-[#ECFDF5]/40 transition-colors flex items-center justify-between gap-2 cursor-pointer group"
                           >
                             <div className="min-w-0">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setOpen(false);
-                                  onOpenLead(lead.id);
-                                }}
-                                className="text-xs font-medium text-[#0F172A] hover:text-[#059669] hover:underline truncate block text-left cursor-pointer"
-                              >
+                              <div className="text-xs font-semibold text-[#0F172A] group-hover:text-[#059669] group-hover:underline truncate">
                                 {lead.name}
-                              </button>
+                              </div>
                               <div className="text-[10px] font-mono-tabular text-[#64748B]">
                                 {lead.phone} · {formatLeadDisplayDate(lead.followUpDate)}
                               </div>
                             </div>
-                            <span
-                              className={`text-[10px] font-semibold shrink-0 ${
-                                urgency === 'overdue'
-                                  ? 'text-[#DC2626]'
-                                  : 'text-[#D97706]'
-                              }`}
-                            >
-                              {urgency === 'overdue' ? 'Overdue' : 'Today'}
-                            </span>
-                          </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span
+                                className={`text-[10px] font-semibold ${
+                                  urgency === 'overdue'
+                                    ? 'text-[#DC2626]'
+                                    : 'text-[#D97706]'
+                                }`}
+                              >
+                                {urgency === 'overdue' ? 'Overdue' : 'Today'}
+                              </span>
+                              <ChevronRight className="w-3.5 h-3.5 text-[#94A3B8] group-hover:text-[#059669] transition-colors" />
+                            </div>
+                          </button>
                         );
                       })}
                     </div>
