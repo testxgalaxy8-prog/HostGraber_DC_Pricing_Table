@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowRightLeft,
   CalendarClock,
+  CalendarPlus,
   Clock,
   Download,
   Edit3,
   FileSpreadsheet,
-  History,
-  KeyRound,
   Lock,
   MessageCircle,
   MessageSquareText,
@@ -16,10 +16,8 @@ import {
   Plus,
   RefreshCw,
   Search,
-  ShieldCheck,
   Trash2,
   UserCheck,
-  Webhook,
   X,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
@@ -31,8 +29,11 @@ import {
 } from '../../lib/leadExport.ts';
 import {
   ALL_LEAD_STATUSES,
+  LEAD_FORM_SOURCES,
   LEAD_SOURCE_LABELS,
   LEAD_STATUS_META,
+  LEAD_TYPE_LABELS,
+  SUMMARY_STATUS_CARDS,
   computeLeadMetrics,
   formatLeadDisplayDate,
   formatLeadDisplayTime,
@@ -57,16 +58,17 @@ import { LeadDetailDrawer } from './LeadDetailDrawer.tsx';
 import { LeadExportMenu } from './LeadExportMenu.tsx';
 import { LeadFormModal, type LeadFormSubmitPayload } from './LeadFormModal.tsx';
 import { LeadImportModal } from './LeadImportModal.tsx';
-import {
-  LeadAccessLogsModal,
-  MySecurityCodeModal,
-  UnlockColleagueModal,
-} from './LeadSecurityModals.tsx';
+import { UnlockColleagueModal } from './LeadSecurityModals.tsx';
 import { LeadTransferModal } from './LeadTransferModal.tsx';
-import { LeadWebhookModal } from './LeadWebhookModal.tsx';
 import { LeadWhatsAppModal } from './LeadWhatsAppModal.tsx';
 
-type SortOption = 'updated' | 'follow_up' | 'lead_date' | 'name';
+type SortOption =
+  | 'updated'
+  | 'follow_up'
+  | 'lead_date'
+  | 'lead_id_asc'
+  | 'lead_id_desc'
+  | 'name';
 
 export function LeadManageView({
   settings,
@@ -79,15 +81,15 @@ export function LeadManageView({
   onOpenedLeadHandled?: () => void;
   onToast: (type: 'success' | 'error', text: string) => void;
 }) {
-  const { user, refreshSession } = useAuth();
+  const { user } = useAuth();
   const currentUserId = user?.id ?? 0;
   const currentUserName = user?.displayName || user?.username || 'Me';
   const isSuperAdmin = user?.role === 'super_admin';
-  const hasSecurityCode = Boolean(user?.hasLeadSecurityCode);
 
   const [scope, setScope] = useState<LeadInterventionScope>('me');
   const [targetUserId, setTargetUserId] = useState<number | null>(null);
   const [myLeadCount, setMyLeadCount] = useState(0);
+  const [watchedLeadCount, setWatchedLeadCount] = useState(0);
   const [colleagues, setColleagues] = useState<LeadColleagueOption[]>([]);
 
   const [leads, setLeads] = useState<LeadItem[]>([]);
@@ -101,6 +103,10 @@ export function LeadManageView({
   const [sourceFilter, setSourceFilter] = useState<'all' | LeadSource>('all');
   const [sortBy, setSortBy] = useState<SortOption>('updated');
 
+  const todayStr = getTodayIsoDate();
+  const [newLeadDate, setNewLeadDate] = useState(todayStr);
+  const [newLeadDateFilterActive, setNewLeadDateFilterActive] = useState(false);
+
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
@@ -111,14 +117,11 @@ export function LeadManageView({
   const [savingForm, setSavingForm] = useState(false);
 
   const [importOpen, setImportOpen] = useState(false);
-  const [webhookOpen, setWebhookOpen] = useState(false);
   const [drawerLeadId, setDrawerLeadId] = useState<number | null>(null);
   const [whatsAppLead, setWhatsAppLead] = useState<LeadItem | null>(null);
 
-  const [securityCodeModalOpen, setSecurityCodeModalOpen] = useState(false);
   const [unlockTargetColleague, setUnlockTargetColleague] =
     useState<LeadColleagueOption | null>(null);
-  const [accessLogsOpen, setAccessLogsOpen] = useState(false);
 
   const [transferModalOpen, setTransferModalOpen] = useState(false);
   const [transferLeadsSubset, setTransferLeadsSubset] = useState<LeadItem[]>([]);
@@ -128,9 +131,11 @@ export function LeadManageView({
     try {
       const data = await apiFetch<{
         myLeadCount: number;
+        watchedLeadCount?: number;
         colleagues: LeadColleagueOption[];
       }>('/api/leads/colleagues');
       setMyLeadCount(data.myLeadCount);
+      setWatchedLeadCount(data.watchedLeadCount ?? 0);
       setColleagues(data.colleagues);
       return data;
     } catch {
@@ -289,16 +294,18 @@ export function LeadManageView({
   const defaultOwnerNameForCreate =
     scope === 'user' && activeColleague ? activeColleague.displayName : currentUserName;
 
-  const todayStr = getTodayIsoDate();
   const metrics = useMemo(
-    () => computeLeadMetrics(leads, todayStr),
-    [leads, todayStr]
+    () => computeLeadMetrics(leads, todayStr, newLeadDate),
+    [leads, todayStr, newLeadDate]
   );
 
   const filteredLeads = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
 
     const list = leads.filter((lead) => {
+      if (newLeadDateFilterActive && lead.leadDate !== newLeadDate) {
+        return false;
+      }
       if (statusFilter !== 'all' && lead.status !== statusFilter) {
         return false;
       }
@@ -331,14 +338,18 @@ export function LeadManageView({
 
       if (q) {
         const haystack = [
+          lead.leadCode,
           lead.name,
           lead.phone,
           lead.normalizedPhone,
+          lead.email || '',
+          LEAD_TYPE_LABELS[lead.leadType],
           lead.latestRemark,
           lead.campaignName || '',
           lead.ownerName,
+          lead.watcherNames.join(' '),
           LEAD_SOURCE_LABELS[lead.source],
-          LEAD_STATUS_META[lead.status].label,
+          LEAD_STATUS_META[lead.status]?.label || lead.status,
         ]
           .join(' ')
           .toLowerCase();
@@ -355,6 +366,10 @@ export function LeadManageView({
       );
     } else if (sortBy === 'name') {
       sorted.sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sortBy === 'lead_id_asc') {
+      sorted.sort((a, b) => a.leadCode.localeCompare(b.leadCode, undefined, { numeric: true }));
+    } else if (sortBy === 'lead_id_desc') {
+      sorted.sort((a, b) => b.leadCode.localeCompare(a.leadCode, undefined, { numeric: true }));
     } else if (sortBy === 'lead_date') {
       sorted.sort((a, b) => (b.leadDate || '').localeCompare(a.leadDate || ''));
     } else if (sortBy === 'follow_up') {
@@ -375,6 +390,8 @@ export function LeadManageView({
     sourceFilter,
     sortBy,
     todayStr,
+    newLeadDate,
+    newLeadDateFilterActive,
   ]);
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
@@ -427,7 +444,8 @@ export function LeadManageView({
         setLeads((prev) =>
           prev.map((item) => (item.id === updated.id ? updated : item))
         );
-        onToast('success', `Updated lead ${updated.name}.`);
+        await loadColleagues();
+        onToast('success', `Updated lead ${updated.leadCode} · ${updated.name}.`);
       } else {
         const created = await apiFetch<LeadItem>('/api/leads', {
           method: 'POST',
@@ -437,6 +455,7 @@ export function LeadManageView({
           scope === 'any' ||
           (scope === 'me' && created.ownerUserId === currentUserId) ||
           (scope === 'other' && created.ownerUserId !== currentUserId) ||
+          (scope === 'watched' && created.watcherUserIds.includes(currentUserId)) ||
           (scope === 'user' && created.ownerUserId === targetUserId);
         if (belongsToCurrentScope) {
           setLeads((prev) => [created, ...prev]);
@@ -444,7 +463,7 @@ export function LeadManageView({
         await loadColleagues();
         onToast(
           'success',
-          `Added lead ${created.name}${
+          `Added lead ${created.leadCode} · ${created.name}${
             created.ownerUserId !== currentUserId
               ? ` under ${created.ownerName}`
               : ''
@@ -563,12 +582,14 @@ export function LeadManageView({
 
     const scopeLabel =
       scope === 'me'
-        ? `Intervened By Me (${currentUserName})`
+        ? `Lead Owner: Me (${currentUserName})`
         : scope === 'any'
-          ? 'Intervened By Any (Me + Unlocked Teammates)'
+          ? 'Lead Owner: Any (Me + Unlocked Teammates)'
           : scope === 'other'
-            ? 'Intervened By Other (Unlocked Teammates)'
-            : `Intervened By ${activeColleague?.displayName || 'Teammate'}`;
+            ? 'Lead Owner: Other (Unlocked Teammates)'
+            : scope === 'watched'
+              ? `Watched by Me (${currentUserName})`
+              : `Lead Owner: ${activeColleague?.displayName || 'Teammate'}`;
 
     exportLeadsFile({
       leads: exportRows,
@@ -592,12 +613,15 @@ export function LeadManageView({
     statusFilter !== 'all' ||
     followUpFilter !== 'all' ||
     Boolean(customFollowUpDate) ||
-    sourceFilter !== 'all';
+    sourceFilter !== 'all' ||
+    newLeadDateFilterActive;
 
-  const showOwnerColumn = scope === 'any' || scope === 'other';
+  const showOwnerColumn =
+    isSuperAdmin || scope === 'any' || scope === 'other' || scope === 'watched';
+  const showWatcherColumn = isSuperAdmin;
 
   return (
-    <div className="max-w-[1400px] mx-auto space-y-4">
+    <div className="max-w-[1440px] mx-auto space-y-4">
       {/* Header & Workspace Action Bar */}
       <div className="space-y-3">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -612,17 +636,12 @@ export function LeadManageView({
               <span className="text-xs text-[#64748B]">
                 ·{' '}
                 {isSuperAdmin ? (
-                  <span className="font-medium text-[#047857]">
-                    Super Admin (Lead Transfer Enabled)
-                  </span>
+                  <span className="font-medium text-[#047857]">Super Admin</span>
                 ) : (
                   'Admin'
                 )}
               </span>
             </div>
-            <p className="text-xs text-[#64748B] mt-0.5">
-              Manage leads from calls, WhatsApp, website, referrals, or bulk imports
-            </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
@@ -630,6 +649,7 @@ export function LeadManageView({
               scope={scope}
               targetUserId={targetUserId}
               myLeadCount={myLeadCount}
+              watchedLeadCount={watchedLeadCount}
               currentCount={leads.length}
               colleagues={colleagues}
               onSelectScope={handleSelectScope}
@@ -666,15 +686,6 @@ export function LeadManageView({
               onExport={handleExportLeads}
             />
 
-            <button
-              type="button"
-              onClick={() => setWebhookOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#334155] bg-white border border-[#CBD5E1] hover:bg-[#F8FAFC] rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-            >
-              <Webhook className="w-3.5 h-3.5 text-[#059669]" />
-              <span>Webhook</span>
-            </button>
-
             {isSuperAdmin && (
               <button
                 type="button"
@@ -687,60 +698,34 @@ export function LeadManageView({
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setSecurityCodeModalOpen(true)}
-              className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium border rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                hasSecurityCode
-                  ? 'text-[#047857] bg-[#ECFDF5] border-[#A7F3D0] hover:bg-[#D1FAE5]'
-                  : 'text-[#B45309] bg-[#FFFBEB] border-[#FCD34D] hover:bg-[#FEF3C7]'
-              }`}
-            >
-              {hasSecurityCode ? (
-                <ShieldCheck className="w-3.5 h-3.5" />
-              ) : (
-                <KeyRound className="w-3.5 h-3.5" />
-              )}
-              <span>{hasSecurityCode ? 'Security Code Set' : 'Set Security Code'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setAccessLogsOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#334155] bg-white border border-[#CBD5E1] hover:bg-[#F8FAFC] rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-            >
-              <History className="w-3.5 h-3.5 text-[#059669]" />
-              <span>Access Logs</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={refreshWorkspace}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#334155] bg-white border border-[#CBD5E1] hover:bg-[#F8FAFC] rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-            >
-              <RefreshCw className="w-3.5 h-3.5 text-[#059669]" />
-              <span>Refresh</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={refreshWorkspace}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#334155] bg-white border border-[#CBD5E1] hover:bg-[#F8FAFC] rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-[#059669]" />
+            <span>Refresh</span>
+          </button>
         </div>
       </div>
 
-      {/* Active Intervention Banner */}
+      {/* Active Owner / Watcher Scope Banner */}
       {scope !== 'me' && (
         <div className="bg-[#ECFDF5] border border-[#A7F3D0] rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2 text-[#065F46]">
             <UserCheck className="w-4 h-4 text-[#059669] shrink-0" />
             {scope === 'user' && activeColleague ? (
               <span>
-                Intervened in <strong>{activeColleague.displayName}&rsquo;s</strong> leads ·
+                Viewing <strong>{activeColleague.displayName}&rsquo;s</strong> owned leads ·
                 Every view and update is recorded with a timestamp
+              </span>
+            ) : scope === 'watched' ? (
+              <span>
+                Showing leads where <strong>{currentUserName}</strong> is assigned as a Lead Watcher
               </span>
             ) : scope === 'any' ? (
               <span>
-                Showing <strong>your leads</strong> combined with{' '}
-                <strong>{unlockedColleagues.length}</strong> unlocked{' '}
-                {unlockedColleagues.length === 1 ? 'teammate' : 'teammates'}
+                Showing <strong>your leads</strong> combined with watched &amp; unlocked leads
               </span>
             ) : (
               <span>
@@ -772,48 +757,99 @@ export function LeadManageView({
         </div>
       )}
 
-      {/* Interactive Status & Follow-Up Alert Summary Cards */}
-      <div className="space-y-2.5">
-        <div className="grid grid-cols-3 gap-2.5">
+      {/* Pipeline Metrics Strip & Status Filter Bar */}
+      <div className="space-y-3">
+        <div className="border border-[#E2E8F0] rounded-xl overflow-hidden grid grid-cols-2 lg:grid-cols-4 gap-px bg-[#E2E8F0]">
           <button
             type="button"
             onClick={() => {
               setStatusFilter('all');
               setFollowUpFilter('all');
               setCustomFollowUpDate('');
+              setNewLeadDateFilterActive(false);
             }}
-            className={`text-left p-3 rounded-xl border transition-colors cursor-pointer ${
-              statusFilter === 'all' && followUpFilter === 'all'
-                ? 'bg-white border-[#0F172A] ring-1 ring-[#0F172A]/15'
-                : 'bg-white border-[#E2E8F0] hover:border-[#94A3B8]'
+            className={`text-left px-4 py-3.5 transition-colors cursor-pointer ${
+              statusFilter === 'all' &&
+              followUpFilter === 'all' &&
+              !newLeadDateFilterActive
+                ? 'bg-[#F8FAFC]'
+                : 'bg-white hover:bg-[#F8FAFC]'
             }`}
           >
-            <div className="text-[11px] font-medium text-[#64748B] truncate">All Leads</div>
-            <div className="mt-1 text-lg font-bold font-mono-tabular text-[#0F172A]">
+            <div className="text-xs font-medium text-[#64748B] whitespace-nowrap">
+              Total Leads
+            </div>
+            <div className="mt-1.5 text-xl font-bold font-mono-tabular leading-none text-[#0F172A]">
               {metrics.total}
             </div>
           </button>
+
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              setStatusFilter('all');
+              setFollowUpFilter('all');
+              setCustomFollowUpDate('');
+              setNewLeadDateFilterActive((prev) => !prev);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setStatusFilter('all');
+                setFollowUpFilter('all');
+                setCustomFollowUpDate('');
+                setNewLeadDateFilterActive((prev) => !prev);
+              }
+            }}
+            className={`text-left px-4 py-3.5 transition-colors cursor-pointer ${
+              newLeadDateFilterActive
+                ? 'bg-[#ECFDF5]'
+                : 'bg-white hover:bg-[#F8FAFC]'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-[#047857] min-w-0">
+                <CalendarPlus className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">New Leads</span>
+              </div>
+              <input
+                type="date"
+                value={newLeadDate}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  const val = e.target.value || todayStr;
+                  setNewLeadDate(val);
+                  setNewLeadDateFilterActive(true);
+                }}
+                aria-label="Filter New Leads by date"
+                className="px-1.5 py-0.5 text-[11px] font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded text-[#0F172A] focus:outline-none focus:border-[#17C964] shrink-0"
+              />
+            </div>
+            <div className="mt-1.5 text-xl font-bold font-mono-tabular leading-none text-[#047857]">
+              {metrics.newLeadsOnDate}
+            </div>
+          </div>
 
           <button
             type="button"
             onClick={() => {
               setStatusFilter('all');
               setCustomFollowUpDate('');
+              setNewLeadDateFilterActive(false);
               setFollowUpFilter((prev) => (prev === 'today' ? 'all' : 'today'));
             }}
-            className={`text-left p-3 rounded-xl border transition-colors cursor-pointer ${
+            className={`text-left px-4 py-3.5 transition-colors cursor-pointer ${
               followUpFilter === 'today'
-                ? 'bg-[#FFFBEB] border-[#F59E0B] ring-1 ring-[#F59E0B]/30'
-                : metrics.todayFollowUps > 0
-                  ? 'bg-[#FFFBEB]/60 border-[#FCD34D]'
-                  : 'bg-white border-[#E2E8F0] hover:border-[#FCD34D]'
+                ? 'bg-[#FFFBEB]'
+                : 'bg-white hover:bg-[#F8FAFC]'
             }`}
           >
-            <div className="flex items-center gap-1 text-[11px] font-semibold text-[#B45309]">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-[#B45309] whitespace-nowrap">
               <CalendarClock className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate">Today</span>
+              <span>Follow-ups Due</span>
             </div>
-            <div className="mt-1 text-lg font-bold font-mono-tabular text-[#B45309]">
+            <div className="mt-1.5 text-xl font-bold font-mono-tabular leading-none text-[#B45309]">
               {metrics.todayFollowUps}
             </div>
           </button>
@@ -823,41 +859,29 @@ export function LeadManageView({
             onClick={() => {
               setStatusFilter('all');
               setCustomFollowUpDate('');
+              setNewLeadDateFilterActive(false);
               setFollowUpFilter((prev) => (prev === 'overdue' ? 'all' : 'overdue'));
             }}
-            className={`text-left p-3 rounded-xl border transition-colors cursor-pointer ${
+            className={`text-left px-4 py-3.5 transition-colors cursor-pointer ${
               followUpFilter === 'overdue'
-                ? 'bg-[#FEF2F2] border-[#EF4444] ring-1 ring-[#EF4444]/30'
-                : metrics.overdueFollowUps > 0
-                  ? 'bg-[#FEF2F2]/65 border-[#FCA5A5]'
-                  : 'bg-white border-[#E2E8F0] hover:border-[#FCA5A5]'
+                ? 'bg-[#FEF2F2]'
+                : 'bg-white hover:bg-[#F8FAFC]'
             }`}
           >
-            <div className="flex items-center gap-1 text-[11px] font-semibold text-[#B91C1C]">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-[#B91C1C] whitespace-nowrap">
               <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate">Overdue</span>
+              <span>Overdue</span>
             </div>
-            <div className="mt-1 text-lg font-bold font-mono-tabular text-[#B91C1C]">
+            <div className="mt-1.5 text-xl font-bold font-mono-tabular leading-none text-[#B91C1C]">
               {metrics.overdueFollowUps}
             </div>
           </button>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
-          {ALL_LEAD_STATUSES.map((st) => {
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+          {SUMMARY_STATUS_CARDS.map((st) => {
             const meta = LEAD_STATUS_META[st];
-            const countValue =
-              st === 'positive'
-                ? metrics.positive
-                : st === 'call_needed'
-                  ? metrics.callNeeded
-                  : st === 'deny'
-                    ? metrics.deny
-                    : st === 'converted'
-                      ? metrics.converted
-                      : st === 'not_required'
-                        ? metrics.notRequired
-                        : metrics.existingClient;
+            const countValue = metrics.statusCounts[st] ?? 0;
             const active = statusFilter === st;
 
             return (
@@ -867,21 +891,23 @@ export function LeadManageView({
                 onClick={() => {
                   setFollowUpFilter('all');
                   setCustomFollowUpDate('');
+                  setNewLeadDateFilterActive(false);
                   setStatusFilter((prev) => (prev === st ? 'all' : st));
                 }}
-                className={`text-left p-3 rounded-xl border transition-colors cursor-pointer ${
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                   active
-                    ? `${meta.cardBgClass} ${meta.cardBorderClass} ring-1 ring-current/20`
-                    : `${meta.cardBgClass} border-[#E2E8F0] hover:${meta.cardBorderClass}`
+                    ? `${meta.cardBgClass} ${meta.cardBorderClass} ${meta.textClass} font-semibold`
+                    : 'bg-white border-[#E2E8F0] text-[#475569] hover:border-[#CBD5E1] hover:text-[#0F172A]'
                 }`}
               >
-                <div className={`flex items-center gap-1.5 text-[11px] font-semibold ${meta.textClass}`}>
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${meta.indicatorClass}`} />
-                  <span className="truncate">{meta.label}</span>
-                </div>
-                <div className={`mt-1 text-lg font-bold font-mono-tabular ${meta.textClass}`}>
+                <span>{meta.shortLabel}</span>
+                <span
+                  className={`font-mono-tabular font-semibold ${
+                    active ? meta.textClass : 'text-[#0F172A]'
+                  }`}
+                >
                   {countValue}
-                </div>
+                </span>
               </button>
             );
           })}
@@ -896,7 +922,7 @@ export function LeadManageView({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search client name, mobile number, remark, owner, or campaign..."
+            placeholder="Search Lead ID, contact name, number, email, remark, owner, or watcher..."
             className="w-full pl-9 pr-8 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:bg-white focus:border-[#17C964]"
           />
           {searchQuery && (
@@ -918,7 +944,7 @@ export function LeadManageView({
             aria-label="Filter by lead status"
             className="w-full xl:w-auto px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:border-[#17C964]"
           >
-            <option value="all">All Statuses</option>
+            <option value="all">Lead Status</option>
             {ALL_LEAD_STATUSES.map((st) => (
               <option key={st} value={st}>
                 {LEAD_STATUS_META[st].label}
@@ -942,8 +968,8 @@ export function LeadManageView({
             aria-label="Filter by lead source"
             className="w-full xl:w-auto px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:border-[#17C964]"
           >
-            <option value="all">All Sources</option>
-            {(Object.keys(LEAD_SOURCE_LABELS) as LeadSource[]).map((src) => (
+            <option value="all">Lead Source</option>
+            {LEAD_FORM_SOURCES.map((src) => (
               <option key={src} value={src}>
                 {LEAD_SOURCE_LABELS[src]}
               </option>
@@ -957,9 +983,11 @@ export function LeadManageView({
             className="w-full xl:w-auto px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:border-[#17C964]"
           >
             <option value="updated">Recent Update</option>
-            <option value="follow_up">Follow-up Soonest</option>
+            <option value="follow_up">Follow-ups First</option>
             <option value="lead_date">Call Date Newest</option>
-            <option value="name">Name (A–Z)</option>
+            <option value="lead_id_asc">Lead ID (A–Z)</option>
+            <option value="lead_id_desc">Lead ID (Z–A)</option>
+            <option value="name">Contact Name (A–Z)</option>
           </select>
 
           {hasActiveFilters && (
@@ -971,6 +999,7 @@ export function LeadManageView({
                 setFollowUpFilter('all');
                 setCustomFollowUpDate('');
                 setSourceFilter('all');
+                setNewLeadDateFilterActive(false);
               }}
               className="col-span-2 sm:col-span-4 xl:col-span-1 justify-self-start px-2.5 py-1.5 text-xs font-semibold text-[#059669] hover:underline cursor-pointer whitespace-nowrap"
             >
@@ -1043,37 +1072,38 @@ export function LeadManageView({
               </button>
             )}
 
-            {!confirmBulkDelete ? (
-              <button
-                type="button"
-                onClick={() => setConfirmBulkDelete(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#B91C1C] bg-white border border-[#FCA5A5] hover:bg-[#FEF2F2] rounded-lg cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete Selected</span>
-              </button>
-            ) : (
-              <div className="flex items-center gap-2 bg-white border border-[#FCA5A5] rounded-lg px-2.5 py-1 text-xs">
-                <span className="font-medium text-[#B91C1C]">
-                  Delete {selectedIds.length}?
-                </span>
+            {isSuperAdmin &&
+              (!confirmBulkDelete ? (
                 <button
                   type="button"
-                  disabled={bulkDeleting}
-                  onClick={handleBulkDelete}
-                  className="px-2.5 py-1 font-semibold text-white bg-red-600 hover:bg-red-700 rounded cursor-pointer"
+                  onClick={() => setConfirmBulkDelete(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#B91C1C] bg-white border border-[#FCA5A5] hover:bg-[#FEF2F2] rounded-lg cursor-pointer"
                 >
-                  {bulkDeleting ? 'Deleting...' : 'Confirm'}
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Selected</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmBulkDelete(false)}
-                  className="px-1.5 py-1 text-[#475569] cursor-pointer"
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
+              ) : (
+                <div className="flex items-center gap-2 bg-white border border-[#FCA5A5] rounded-lg px-2.5 py-1 text-xs">
+                  <span className="font-medium text-[#B91C1C]">
+                    Delete {selectedIds.length}?
+                  </span>
+                  <button
+                    type="button"
+                    disabled={bulkDeleting}
+                    onClick={handleBulkDelete}
+                    className="px-2.5 py-1 font-semibold text-white bg-red-600 hover:bg-red-700 rounded cursor-pointer"
+                  >
+                    {bulkDeleting ? 'Deleting...' : 'Confirm'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmBulkDelete(false)}
+                    className="px-1.5 py-1 text-[#475569] cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ))}
           </div>
         </div>
       )}
@@ -1108,11 +1138,11 @@ export function LeadManageView({
           <p className="text-xs text-[#64748B] max-w-md mx-auto">
             {leads.length === 0
               ? scope === 'other' && unlockedColleagues.length === 0
-                ? 'Open the Intervened By menu above and select a teammate to enter their security code.'
+                ? 'Open the Lead Owner menu above and select a teammate to enter their security code.'
                 : 'Add a lead manually from calls, WhatsApp, website, or referrals, or bulk import a CSV/Excel sheet.'
               : 'Try clearing the search query or switching status and follow-up filters.'}
           </p>
-          {leads.length === 0 && scope !== 'other' && (
+          {leads.length === 0 && scope !== 'other' && scope !== 'watched' && (
             <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
               <button
                 type="button"
@@ -1136,7 +1166,7 @@ export function LeadManageView({
       ) : (
         <>
           {/* Desktop Status-Colored Table */}
-          <div className="hidden lg:block bg-white border border-[#E2E8F0] rounded-xl overflow-hidden">
+          <div className="hidden xl:block bg-white border border-[#E2E8F0] rounded-xl overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-sm">
                 <thead>
@@ -1150,27 +1180,33 @@ export function LeadManageView({
                         className="w-4 h-4 rounded border-[#CBD5E1] accent-[#17C964] cursor-pointer"
                       />
                     </th>
-                    <th className="py-2.5 px-2 whitespace-nowrap">Client</th>
-                    {showOwnerColumn && (
-                      <th className="py-2.5 px-2 whitespace-nowrap">Owner</th>
-                    )}
-                    <th className="py-2.5 px-2 whitespace-nowrap">Mobile Number</th>
+                    <th className="py-2.5 px-2 whitespace-nowrap">Lead ID</th>
+                    <th className="py-2.5 px-2 whitespace-nowrap">Contact Name</th>
+                    <th className="py-2.5 px-2 whitespace-nowrap">Contact Number</th>
                     <th className="py-2.5 px-2 whitespace-nowrap">Lead Status</th>
                     <th className="py-2.5 px-2 whitespace-nowrap">Latest Call Remark</th>
                     <th className="py-2.5 px-2 whitespace-nowrap">Call Date</th>
                     <th className="py-2.5 px-2 whitespace-nowrap">Follow-up Date</th>
+                    {showOwnerColumn && (
+                      <th className="py-2.5 px-2 whitespace-nowrap">Lead Owner</th>
+                    )}
+                    {showWatcherColumn && (
+                      <th className="py-2.5 px-2 whitespace-nowrap">Lead Watcher</th>
+                    )}
                     <th className="py-2.5 pl-1.5 pr-3 text-right whitespace-nowrap">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E2E8F0]">
                   {filteredLeads.map((lead) => {
-                    const meta = LEAD_STATUS_META[lead.status];
+                    const meta = LEAD_STATUS_META[lead.status] || LEAD_STATUS_META.new_lead;
                     const urgency = getFollowUpUrgency(
                       lead.followUpDate,
                       lead.status,
                       todayStr
                     );
                     const isDeletingThis = confirmRowDeleteId === lead.id;
+                    const isDuplicatePhone =
+                      isSuperAdmin && (lead.duplicatePhoneCount ?? 0) > 1;
 
                     return (
                       <tr
@@ -1187,7 +1223,17 @@ export function LeadManageView({
                           />
                         </td>
 
-                        <td className="py-3 px-2 align-top min-w-[115px] max-w-[165px]">
+                        <td className="py-3 px-2 align-top whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => setDrawerLeadId(lead.id)}
+                            className="font-mono-tabular text-xs font-semibold text-[#0F172A] hover:text-[#059669] cursor-pointer"
+                          >
+                            {lead.leadCode}
+                          </button>
+                        </td>
+
+                        <td className="py-3 px-2 align-top min-w-[130px] max-w-[185px]">
                           <button
                             type="button"
                             onClick={() => setDrawerLeadId(lead.id)}
@@ -1197,28 +1243,30 @@ export function LeadManageView({
                               {lead.name}
                             </div>
                             <div className="text-[11px] text-[#64748B] mt-0.5 truncate">
-                              {LEAD_SOURCE_LABELS[lead.source]}
+                              {LEAD_TYPE_LABELS[lead.leadType]} · {LEAD_SOURCE_LABELS[lead.source]}
                               {lead.campaignName ? ` · ${lead.campaignName}` : ''}
                             </div>
                           </button>
                         </td>
 
-                        {showOwnerColumn && (
-                          <td className="py-3 px-2 align-top whitespace-nowrap text-xs font-medium text-[#334155]">
-                            {lead.ownerUserId === currentUserId
-                              ? `${lead.ownerName} (Me)`
-                              : lead.ownerName}
-                          </td>
-                        )}
-
                         <td className="py-3 px-2 align-top whitespace-nowrap">
                           <a
                             href={`tel:+${lead.normalizedPhone}`}
-                            className="inline-flex items-center gap-1 text-xs font-mono-tabular font-semibold text-[#0F172A] hover:text-[#059669]"
+                            className={`inline-flex items-center gap-1 text-xs font-mono-tabular font-semibold ${
+                              isDuplicatePhone
+                                ? 'text-[#B45309] hover:text-[#92400E]'
+                                : 'text-[#0F172A] hover:text-[#059669]'
+                            }`}
                           >
                             <Phone className="w-3 h-3 text-[#64748B] shrink-0" />
                             <span>{lead.phone}</span>
                           </a>
+                          {isDuplicatePhone && (
+                            <div className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-semibold text-[#B45309]">
+                              <AlertTriangle className="w-3 h-3 shrink-0" />
+                              <span>Duplicate ({lead.duplicatePhoneCount}x)</span>
+                            </div>
+                          )}
                         </td>
 
                         <td className="py-3 px-2 align-top whitespace-nowrap">
@@ -1328,6 +1376,24 @@ export function LeadManageView({
                           )}
                         </td>
 
+                        {showOwnerColumn && (
+                          <td className="py-3 px-2 align-top whitespace-nowrap text-xs font-medium text-[#334155]">
+                            {lead.ownerUserId === currentUserId
+                              ? `${lead.ownerName} (Me)`
+                              : lead.ownerName}
+                          </td>
+                        )}
+
+                        {showWatcherColumn && (
+                          <td className="py-3 px-2 align-top text-xs text-[#475569] max-w-[150px]">
+                            <span className="line-clamp-2">
+                              {lead.watcherNames.length > 0
+                                ? lead.watcherNames.join(', ')
+                                : '—'}
+                            </span>
+                          </td>
+                        )}
+
                         <td className="py-3 pl-1.5 pr-3 align-top text-right whitespace-nowrap">
                           {isDeletingThis ? (
                             <div className="inline-flex items-center gap-1.5 bg-white border border-[#FCA5A5] rounded-lg px-2 py-1 text-xs">
@@ -1379,25 +1445,27 @@ export function LeadManageView({
                                 <Edit3 className="w-3.5 h-3.5" />
                               </button>
                               {isSuperAdmin && (
-                                <button
-                                  type="button"
-                                  onClick={() => openTransferModal([lead])}
-                                  title={`Transfer ${lead.name} to another user`}
-                                  aria-label={`Transfer ${lead.name}`}
-                                  className="p-1.5 text-[#047857] hover:bg-[#ECFDF5] bg-white border border-[#A7F3D0] rounded-lg cursor-pointer"
-                                >
-                                  <ArrowRightLeft className="w-3.5 h-3.5" />
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => openTransferModal([lead])}
+                                    title={`Transfer ${lead.name} to another user`}
+                                    aria-label={`Transfer ${lead.name}`}
+                                    className="p-1.5 text-[#047857] hover:bg-[#ECFDF5] bg-white border border-[#A7F3D0] rounded-lg cursor-pointer"
+                                  >
+                                    <ArrowRightLeft className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmRowDeleteId(lead.id)}
+                                    title={`Delete ${lead.name}`}
+                                    aria-label={`Delete ${lead.name}`}
+                                    className="p-1.5 text-[#B91C1C] hover:bg-[#FEF2F2] bg-white border border-[#FCA5A5] rounded-lg cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
                               )}
-                              <button
-                                type="button"
-                                onClick={() => setConfirmRowDeleteId(lead.id)}
-                                title={`Delete ${lead.name}`}
-                                aria-label={`Delete ${lead.name}`}
-                                className="p-1.5 text-[#B91C1C] hover:bg-[#FEF2F2] bg-white border border-[#FCA5A5] rounded-lg cursor-pointer"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
                             </div>
                           )}
                         </td>
@@ -1410,15 +1478,17 @@ export function LeadManageView({
           </div>
 
           {/* Mobile / Tablet Status-Colored Cards */}
-          <div className="lg:hidden grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="xl:hidden grid grid-cols-1 md:grid-cols-2 gap-3">
             {filteredLeads.map((lead) => {
-              const meta = LEAD_STATUS_META[lead.status];
+              const meta = LEAD_STATUS_META[lead.status] || LEAD_STATUS_META.new_lead;
               const urgency = getFollowUpUrgency(
                 lead.followUpDate,
                 lead.status,
                 todayStr
               );
               const isDeletingThis = confirmRowDeleteId === lead.id;
+              const isDuplicatePhone =
+                isSuperAdmin && (lead.duplicatePhoneCount ?? 0) > 1;
 
               return (
                 <article
@@ -1436,9 +1506,11 @@ export function LeadManageView({
                       />
                       <div className="min-w-0">
                         <div className="text-[11px] text-[#64748B] truncate">
-                          {LEAD_SOURCE_LABELS[lead.source]}
+                          <span className="font-mono-tabular font-semibold text-[#0F172A]">
+                            {lead.leadCode}
+                          </span>{' '}
+                          · {LEAD_TYPE_LABELS[lead.leadType]} · {LEAD_SOURCE_LABELS[lead.source]}
                           {lead.campaignName ? ` · ${lead.campaignName}` : ''}
-                          {showOwnerColumn ? ` · Owner: ${lead.ownerName}` : ''}
                         </div>
                         <button
                           type="button"
@@ -1447,13 +1519,31 @@ export function LeadManageView({
                         >
                           {lead.name}
                         </button>
-                        <a
-                          href={`tel:+${lead.normalizedPhone}`}
-                          className="inline-flex items-center gap-1 text-xs font-mono-tabular font-semibold text-[#334155] mt-0.5"
-                        >
-                          <Phone className="w-3 h-3" />
-                          <span>{lead.phone}</span>
-                        </a>
+                        <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                          <a
+                            href={`tel:+${lead.normalizedPhone}`}
+                            className={`inline-flex items-center gap-1 text-xs font-mono-tabular font-semibold ${
+                              isDuplicatePhone ? 'text-[#B45309]' : 'text-[#334155]'
+                            }`}
+                          >
+                            <Phone className="w-3 h-3" />
+                            <span>{lead.phone}</span>
+                          </a>
+                          {isDuplicatePhone && (
+                            <span className="text-[10px] font-semibold text-[#B45309]">
+                              Duplicate ({lead.duplicatePhoneCount}x)
+                            </span>
+                          )}
+                        </div>
+                        {(showOwnerColumn || (showWatcherColumn && lead.watcherNames.length > 0)) && (
+                          <div className="text-[11px] text-[#475569] mt-1">
+                            {showOwnerColumn && <span>Owner: {lead.ownerName}</span>}
+                            {showOwnerColumn && showWatcherColumn && lead.watcherNames.length > 0 && ' · '}
+                            {showWatcherColumn && lead.watcherNames.length > 0 && (
+                              <span>Watchers: {lead.watcherNames.join(', ')}</span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -1540,32 +1630,34 @@ export function LeadManageView({
                       <Edit3 className="w-3.5 h-3.5" />
                     </button>
                     {isSuperAdmin && (
-                      <button
-                        type="button"
-                        onClick={() => openTransferModal([lead])}
-                        aria-label={`Transfer ${lead.name}`}
-                        className="p-2 text-[#047857] bg-white border border-[#A7F3D0] rounded-lg cursor-pointer"
-                      >
-                        <ArrowRightLeft className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                    {!isDeletingThis ? (
-                      <button
-                        type="button"
-                        onClick={() => setConfirmRowDeleteId(lead.id)}
-                        aria-label={`Delete ${lead.name}`}
-                        className="p-2 text-[#B91C1C] bg-white border border-[#FCA5A5] rounded-lg cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteRow(lead)}
-                        className="px-2.5 py-1.5 text-xs font-semibold text-white bg-red-600 rounded-lg cursor-pointer"
-                      >
-                        Confirm Delete
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => openTransferModal([lead])}
+                          aria-label={`Transfer ${lead.name}`}
+                          className="p-2 text-[#047857] bg-white border border-[#A7F3D0] rounded-lg cursor-pointer"
+                        >
+                          <ArrowRightLeft className="w-3.5 h-3.5" />
+                        </button>
+                        {!isDeletingThis ? (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmRowDeleteId(lead.id)}
+                            aria-label={`Delete ${lead.name}`}
+                            className="p-2 text-[#B91C1C] bg-white border border-[#FCA5A5] rounded-lg cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteRow(lead)}
+                            className="px-2.5 py-1.5 text-xs font-semibold text-white bg-red-600 rounded-lg cursor-pointer"
+                          >
+                            Confirm Delete
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 </article>
@@ -1579,11 +1671,13 @@ export function LeadManageView({
       <LeadFormModal
         isOpen={formOpen}
         editingLead={editingLead}
+        isSuperAdmin={isSuperAdmin}
         saving={savingForm}
         currentUserId={currentUserId}
         currentUserName={currentUserName}
         defaultOwnerUserId={defaultOwnerForCreate}
         unlockedColleagues={unlockedColleagues}
+        allColleagues={colleagues}
         onClose={() => setFormOpen(false)}
         onSubmit={handleFormSubmit}
       />
@@ -1597,15 +1691,10 @@ export function LeadManageView({
         onToast={onToast}
       />
 
-      <LeadWebhookModal
-        isOpen={webhookOpen}
-        onClose={() => setWebhookOpen(false)}
-        onToast={onToast}
-      />
-
       <LeadDetailDrawer
         leadId={drawerLeadId}
         canTransfer={isSuperAdmin}
+        canDelete={isSuperAdmin}
         onClose={() => setDrawerLeadId(null)}
         onEditLead={(lead) => {
           setDrawerLeadId(null);
@@ -1636,24 +1725,11 @@ export function LeadManageView({
         onToast={onToast}
       />
 
-      <MySecurityCodeModal
-        isOpen={securityCodeModalOpen}
-        hasExistingCode={hasSecurityCode}
-        onClose={() => setSecurityCodeModalOpen(false)}
-        onSaved={refreshSession}
-        onToast={onToast}
-      />
-
       <UnlockColleagueModal
         colleague={unlockTargetColleague}
         onClose={() => setUnlockTargetColleague(null)}
         onUnlocked={handleColleagueUnlocked}
         onToast={onToast}
-      />
-
-      <LeadAccessLogsModal
-        isOpen={accessLogsOpen}
-        onClose={() => setAccessLogsOpen(false)}
       />
 
       {isSuperAdmin && (

@@ -9,6 +9,7 @@ import { asc, desc, eq, or } from 'drizzle-orm';
 import { db } from './src/db/index.ts';
 import {
   categories,
+  departments,
   importHistory,
   planChangeLogs,
   pricingHistory,
@@ -60,6 +61,27 @@ import {
   updateLeadRecord,
   updateLeadReminderAction,
 } from './src/db/leads.ts';
+import {
+  createCommunicationTemplate,
+  createDepartmentRecord,
+  createKnowledgebaseArticle,
+  deleteCommunicationTemplate,
+  deleteDepartmentRecord,
+  deleteKnowledgebaseArticle,
+  deleteTeamTargetRecord,
+  fetchCombinedDashboard,
+  fetchCommunicationTemplates,
+  fetchDepartments,
+  fetchKnowledgebaseArticles,
+  fetchKnowledgebaseImageById,
+  fetchReportsAnalytics,
+  fetchTeamTargets,
+  saveKnowledgebaseImage,
+  updateCommunicationTemplate,
+  updateDepartmentRecord,
+  updateKnowledgebaseArticle,
+  upsertTeamTargetRecord,
+} from './src/db/portalModules.ts';
 import {
   extractSessionToken,
   requireAdminSession,
@@ -150,6 +172,60 @@ const logoUpload = multer({
   },
 });
 
+const ALLOWED_KB_IMAGE_EXTENSIONS = new Map<string, string>([
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.webp', 'image/webp'],
+  ['.gif', 'image/gif'],
+]);
+const ALLOWED_KB_IMAGE_MIMES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+]);
+
+const kbImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 3 * 1024 * 1024,
+  },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const mime = (file.mimetype || '').toLowerCase();
+    if (!ALLOWED_KB_IMAGE_EXTENSIONS.has(ext) && !ALLOWED_KB_IMAGE_MIMES.has(mime)) {
+      cb(new Error('Invalid image format. Upload PNG, JPG, WEBP, or GIF (max 3 MB).'));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+const ALLOWED_AVATAR_EXTENSIONS = new Map<string, string>([
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.webp', 'image/webp'],
+]);
+const ALLOWED_AVATAR_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 2 * 1024 * 1024,
+  },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const mime = (file.mimetype || '').toLowerCase();
+    if (!ALLOWED_AVATAR_EXTENSIONS.has(ext) && !ALLOWED_AVATAR_MIMES.has(mime)) {
+      cb(new Error('Invalid image format. Upload PNG, JPG, or WEBP (max 2 MB).'));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
 function validateLogoUrl(raw: string | null | undefined): string | null {
   if (raw === null || raw === undefined) return null;
   const trimmed = raw.trim();
@@ -196,13 +272,24 @@ function setSessionCookie(res: Response, token: string) {
   });
 }
 
-function sanitizeUser(u: typeof users.$inferSelect) {
+function sanitizeUser(
+  u: typeof users.$inferSelect,
+  departmentNameMap?: Map<number, string>
+) {
   return {
     id: u.id,
     username: u.username,
     email: u.email,
     displayName: u.displayName,
     role: u.role as UserRole,
+    departmentId: u.departmentId ?? null,
+    departmentName:
+      u.departmentId !== null && u.departmentId !== undefined
+        ? departmentNameMap?.get(u.departmentId) ?? null
+        : null,
+    jobTitle: u.jobTitle ?? null,
+    phone: u.phone ?? null,
+    avatarUrl: u.avatarUrl ?? null,
     mustChangePassword: u.mustChangePassword,
     isActive: u.isActive,
     hasLeadSecurityCode: Boolean(u.leadSecurityCodeHash),
@@ -366,13 +453,16 @@ app.get('/api/auth/session', async (req, res) => {
       return;
     }
 
-    const [portalSettings, categoryList] = await Promise.all([
+    const [portalSettings, categoryList, deptRows] = await Promise.all([
       getOrInitSettings(),
       ensureDefaultCategories(),
+      db.select().from(departments),
     ]);
+    const deptMap = new Map<number, string>();
+    for (const d of deptRows) deptMap.set(d.id, d.name);
 
     res.json({
-      user: sanitizeUser(rows[0].user),
+      user: sanitizeUser(rows[0].user, deptMap),
       settings: portalSettings,
       categories: categoryList,
     });
@@ -458,6 +548,96 @@ app.post('/api/auth/change-password', requireAdminSession, async (req: AuthReque
     res.status(500).json({ error: 'Failed to update password.' });
   }
 });
+
+app.post(
+  '/api/profile/avatar',
+  requireAdminSession,
+  requirePasswordChanged,
+  (req: AuthRequest, res: Response, next: NextFunction) => {
+    avatarUpload.single('avatar')(req, res, (err) => {
+      if (err) {
+        const message =
+          err instanceof Error
+            ? err.message
+            : 'Invalid profile picture upload (PNG, JPG, or WEBP up to 2 MB).';
+        res.status(400).json({ error: message });
+        return;
+      }
+      next();
+    });
+  },
+  async (req: AuthRequest, res: Response) => {
+    try {
+      if (!req.file) {
+        res.status(400).json({ error: 'Please select an image file to upload.' });
+        return;
+      }
+
+      const ext = path.extname(req.file.originalname).toLowerCase();
+      const rawMime = (req.file.mimetype || '').toLowerCase();
+      const mimeType = ALLOWED_AVATAR_MIMES.has(rawMime)
+        ? rawMime
+        : ALLOWED_AVATAR_EXTENSIONS.get(ext) || 'image/png';
+
+      const dataUrl = `data:${mimeType};base64,${req.file.buffer.toString('base64')}`;
+
+      const updated = await db
+        .update(users)
+        .set({
+          avatarUrl: dataUrl,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, req.dbUser!.id))
+        .returning();
+
+      if (updated.length === 0) {
+        res.status(404).json({ error: 'User account not found.' });
+        return;
+      }
+
+      const deptRows = await db.select().from(departments);
+      const deptMap = new Map<number, string>();
+      for (const d of deptRows) deptMap.set(d.id, d.name);
+
+      res.json({ user: sanitizeUser(updated[0], deptMap) });
+    } catch (error) {
+      console.error('POST /api/profile/avatar failed:', error);
+      res.status(500).json({ error: 'Failed to upload profile picture.' });
+    }
+  }
+);
+
+app.delete(
+  '/api/profile/avatar',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const updated = await db
+        .update(users)
+        .set({
+          avatarUrl: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, req.dbUser!.id))
+        .returning();
+
+      if (updated.length === 0) {
+        res.status(404).json({ error: 'User account not found.' });
+        return;
+      }
+
+      const deptRows = await db.select().from(departments);
+      const deptMap = new Map<number, string>();
+      for (const d of deptRows) deptMap.set(d.id, d.name);
+
+      res.json({ user: sanitizeUser(updated[0], deptMap) });
+    } catch (error) {
+      console.error('DELETE /api/profile/avatar failed:', error);
+      res.status(500).json({ error: 'Failed to remove profile picture.' });
+    }
+  }
+);
 
 // =========================================================================
 // PROTECTED ADMIN PANEL ROUTES
@@ -612,6 +792,7 @@ app.post(
   '/api/admin/logo/upload',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   logoUpload.single('logo'),
   async (req: AuthRequest, res) => {
     try {
@@ -676,6 +857,7 @@ app.put(
   '/api/admin/logo',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   async (req: AuthRequest, res) => {
     try {
       const current = await getOrInitSettings();
@@ -723,6 +905,7 @@ app.delete(
   '/api/admin/logo',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   async (req: AuthRequest, res) => {
     try {
       const current = await getOrInitSettings();
@@ -767,6 +950,7 @@ app.post(
   '/api/categories',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   async (req: AuthRequest, res) => {
     try {
       const { name, description, sortOrder } = req.body as {
@@ -848,6 +1032,7 @@ app.post(
   '/api/plans',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   async (req: AuthRequest, res) => {
     try {
       const body = req.body as UpsertPlanInput;
@@ -874,6 +1059,7 @@ app.put(
   '/api/plans/:id',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   async (req: AuthRequest, res) => {
     try {
       const id = Number(req.params.id);
@@ -906,6 +1092,7 @@ app.patch(
   '/api/plans/:id/status',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   async (req: AuthRequest, res) => {
     try {
       const id = Number(req.params.id);
@@ -937,6 +1124,7 @@ app.delete(
   '/api/plans/:id',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   async (req: AuthRequest, res) => {
     try {
       const id = Number(req.params.id);
@@ -959,6 +1147,7 @@ app.post(
   '/api/plans/bulk-delete',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   async (req: AuthRequest, res) => {
     try {
       const rawIds = (req.body as { planIds?: unknown })?.planIds;
@@ -1010,32 +1199,21 @@ app.post(
   }
 );
 
-// Dashboard
+// Combined Executive Dashboard
 app.get(
   '/api/dashboard',
   requireAdminSession,
   requirePasswordChanged,
-  async (_req, res) => {
+  async (req: AuthRequest, res) => {
     try {
-      const [allPlans, latestImports] = await Promise.all([
-        fetchAllPlans({ activeOnly: false }),
-        db
-          .select()
-          .from(importHistory)
-          .orderBy(desc(importHistory.createdAt))
-          .limit(1),
-      ]);
-
-      const activeCount = allPlans.filter((p) => p.isActive).length;
-      const inactiveCount = allPlans.length - activeCount;
-
-      res.json({
-        totalPlans: allPlans.length,
-        activePlans: activeCount,
-        inactivePlans: inactiveCount,
-        lastExcelUpload: latestImports[0] || null,
-        recentlyUpdatedPlans: allPlans.slice(0, 8),
+      const access = getLeadAccessContext(req);
+      const data = await fetchCombinedDashboard({
+        viewerUserId: access.viewerUserId,
+        viewerName: access.viewerName,
+        isSuperAdmin: req.dbUser!.role === 'super_admin',
+        sessionTokenHash: access.sessionTokenHash,
       });
+      res.json(data);
     } catch (error) {
       console.error('GET /api/dashboard failed:', error);
       res.status(500).json({ error: 'Failed to load dashboard summary.' });
@@ -1127,6 +1305,7 @@ app.post(
   '/api/excel/inspect',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   upload.single('file'),
   async (req: AuthRequest, res) => {
     try {
@@ -1175,6 +1354,7 @@ app.post(
   '/api/excel/preview',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   async (req: AuthRequest, res) => {
     try {
       const {
@@ -1230,6 +1410,7 @@ app.post(
   '/api/excel/commit',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   async (req: AuthRequest, res) => {
     const {
       uploadToken,
@@ -1385,8 +1566,13 @@ app.get(
   requirePasswordChanged,
   async (_req, res) => {
     try {
-      const rows = await db.select().from(users).orderBy(asc(users.createdAt));
-      res.json(rows.map(sanitizeUser));
+      const [rows, deptRows] = await Promise.all([
+        db.select().from(users).orderBy(asc(users.createdAt)),
+        db.select().from(departments),
+      ]);
+      const deptMap = new Map<number, string>();
+      for (const d of deptRows) deptMap.set(d.id, d.name);
+      res.json(rows.map((u) => sanitizeUser(u, deptMap)));
     } catch (error) {
       console.error('GET /api/users failed:', error);
       res.status(500).json({ error: 'Failed to load admin users.' });
@@ -1401,12 +1587,24 @@ app.post(
   requireSuperAdmin,
   async (req, res) => {
     try {
-      const { username, email, displayName, password, role } = req.body as {
+      const {
+        username,
+        email,
+        displayName,
+        password,
+        role,
+        departmentId,
+        jobTitle,
+        phone,
+      } = req.body as {
         username?: string;
         email?: string;
         displayName?: string;
         password?: string;
         role?: UserRole;
+        departmentId?: number | null;
+        jobTitle?: string | null;
+        phone?: string | null;
       };
 
       const cleanUsername = (username || '').trim().toLowerCase();
@@ -1441,6 +1639,16 @@ app.post(
         return;
       }
 
+      let resolvedDeptId: number | null = null;
+      if (departmentId && Number.isInteger(Number(departmentId))) {
+        const [deptRow] = await db
+          .select({ id: departments.id })
+          .from(departments)
+          .where(eq(departments.id, Number(departmentId)))
+          .limit(1);
+        if (deptRow) resolvedDeptId = deptRow.id;
+      }
+
       const inserted = await db
         .insert(users)
         .values({
@@ -1449,15 +1657,83 @@ app.post(
           displayName: displayName?.trim() || cleanUsername,
           passwordHash: hashPassword(password),
           role: validRole,
+          departmentId: resolvedDeptId,
+          jobTitle: jobTitle?.trim() || null,
+          phone: phone?.trim() || null,
           mustChangePassword: false,
           isActive: true,
         })
         .returning();
 
-      res.status(201).json(sanitizeUser(inserted[0]));
+      const deptRows = await db.select().from(departments);
+      const deptMap = new Map<number, string>();
+      for (const d of deptRows) deptMap.set(d.id, d.name);
+
+      res.status(201).json(sanitizeUser(inserted[0], deptMap));
     } catch (error) {
       console.error('POST /api/users failed:', error);
       res.status(500).json({ error: 'Failed to create admin user.' });
+    }
+  }
+);
+
+app.patch(
+  '/api/users/:id/profile',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'Valid user ID is required.' });
+        return;
+      }
+      const { displayName, departmentId, jobTitle, phone } = req.body as {
+        displayName?: string | null;
+        departmentId?: number | null;
+        jobTitle?: string | null;
+        phone?: string | null;
+      };
+
+      let resolvedDeptId: number | null = null;
+      if (departmentId !== null && departmentId !== undefined) {
+        const parsedDept = Number(departmentId);
+        if (Number.isInteger(parsedDept) && parsedDept > 0) {
+          const [deptRow] = await db
+            .select({ id: departments.id })
+            .from(departments)
+            .where(eq(departments.id, parsedDept))
+            .limit(1);
+          if (deptRow) resolvedDeptId = deptRow.id;
+        }
+      }
+
+      const updated = await db
+        .update(users)
+        .set({
+          ...(displayName !== undefined
+            ? { displayName: displayName?.trim() || null }
+            : {}),
+          ...(departmentId !== undefined ? { departmentId: resolvedDeptId } : {}),
+          ...(jobTitle !== undefined ? { jobTitle: jobTitle?.trim() || null } : {}),
+          ...(phone !== undefined ? { phone: phone?.trim() || null } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, id))
+        .returning();
+
+      if (updated.length === 0) {
+        res.status(404).json({ error: 'User not found.' });
+        return;
+      }
+      const deptRows = await db.select().from(departments);
+      const deptMap = new Map<number, string>();
+      for (const d of deptRows) deptMap.set(d.id, d.name);
+      res.json(sanitizeUser(updated[0], deptMap));
+    } catch (error) {
+      console.error('PATCH /api/users/:id/profile failed:', error);
+      res.status(500).json({ error: 'Failed to update team member profile.' });
     }
   }
 );
@@ -1681,7 +1957,10 @@ app.get(
       const access = getLeadAccessContext(req);
       const rawScope = typeof req.query.scope === 'string' ? req.query.scope : 'me';
       const scope: LeadInterventionScope =
-        rawScope === 'any' || rawScope === 'other' || rawScope === 'user'
+        rawScope === 'any' ||
+        rawScope === 'other' ||
+        rawScope === 'watched' ||
+        rawScope === 'user'
           ? rawScope
           : 'me';
       const targetUserId = req.query.userId ? Number(req.query.userId) : null;
@@ -1693,6 +1972,7 @@ app.get(
           targetUserId && !Number.isNaN(targetUserId) ? targetUserId : null,
         viewerUserId: access.viewerUserId,
         viewerName: access.viewerName,
+        isSuperAdmin: req.dbUser!.role === 'super_admin',
         sessionTokenHash: access.sessionTokenHash,
         logSwitch,
       });
@@ -1830,6 +2110,7 @@ app.get(
   '/api/leads/webhook-config',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   async (req, res) => {
     try {
       const webhookSecret = await getOrEnsureAiSensyWebhookSecret();
@@ -1848,6 +2129,7 @@ app.post(
   '/api/leads/webhook-config/rotate',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   async (req: AuthRequest, res) => {
     try {
       const actor = req.dbUser?.displayName || req.dbUser?.username || 'admin';
@@ -1873,6 +2155,7 @@ app.get(
       const items = await fetchActiveLeadReminders({
         viewerUserId: access.viewerUserId,
         sessionTokenHash: access.sessionTokenHash,
+        isSuperAdmin: req.dbUser!.role === 'super_admin',
       });
       res.json(items);
     } catch (error) {
@@ -1897,6 +2180,7 @@ app.get(
       const lead = await fetchLeadById(id, {
         viewerUserId: access.viewerUserId,
         sessionTokenHash: access.sessionTokenHash,
+        isSuperAdmin: req.dbUser!.role === 'super_admin',
       });
       if (!lead) {
         res.status(404).json({ error: 'Lead not found.' });
@@ -1926,9 +2210,12 @@ app.post(
     try {
       const access = getLeadAccessContext(req);
       const body = req.body as {
+        leadCode?: string | null;
         ownerUserId?: number | null;
         name?: string;
         phone?: string;
+        email?: string | null;
+        leadType?: string | null;
         source?: string;
         campaignName?: string | null;
         status?: string;
@@ -1936,26 +2223,38 @@ app.post(
         leadDate?: string | null;
         followUpDate?: string | null;
         followUpTime?: string | null;
+        dealValue?: number | null;
+        watcherUserIds?: number[];
       };
 
       const created = await createLeadRecord(
         {
+          leadCode: null,
           ownerUserId:
             body.ownerUserId && Number.isInteger(Number(body.ownerUserId))
               ? Number(body.ownerUserId)
               : access.viewerUserId,
           name: body.name || '',
           phone: body.phone || '',
-          source: body.source || 'manual',
+          email: body.email ?? null,
+          leadType: body.leadType ?? 'retail',
+          source: body.source || 'other',
           campaignName: body.campaignName ?? null,
-          status: body.status || 'call_needed',
+          status: body.status || 'new_lead',
           latestRemark: body.latestRemark ?? '',
           leadDate: body.leadDate ?? null,
           followUpDate: body.followUpDate ?? null,
           followUpTime: body.followUpTime ?? null,
+          dealValue: body.dealValue ?? null,
+          watcherUserIds: Array.isArray(body.watcherUserIds)
+            ? body.watcherUserIds
+            : [],
           actor: access.viewerName,
         },
-        access
+        {
+          ...access,
+          isSuperAdmin: req.dbUser!.role === 'super_admin',
+        }
       );
       res.status(201).json(created);
     } catch (error) {
@@ -1983,8 +2282,11 @@ app.put(
       }
       const access = getLeadAccessContext(req);
       const body = req.body as {
+        leadCode?: string | null;
         name?: string;
         phone?: string;
+        email?: string | null;
+        leadType?: string | null;
         source?: string;
         campaignName?: string | null;
         status?: string;
@@ -1992,15 +2294,25 @@ app.put(
         leadDate?: string | null;
         followUpDate?: string | null;
         followUpTime?: string | null;
+        dealValue?: number | null;
+        watcherUserIds?: number[];
       };
+
+      const safeBody = { ...body };
+      if (req.dbUser?.role !== 'super_admin') {
+        delete safeBody.leadCode;
+      }
 
       const updated = await updateLeadRecord(
         id,
         {
-          ...body,
+          ...safeBody,
           actor: access.viewerName,
         },
-        access
+        {
+          ...access,
+          isSuperAdmin: req.dbUser!.role === 'super_admin',
+        }
       );
       if (!updated) {
         res.status(404).json({ error: 'Lead not found.' });
@@ -2043,13 +2355,16 @@ app.post(
         id,
         {
           remark: body.remark || '',
-          statusAtCall: body.statusAtCall || 'call_needed',
+          statusAtCall: body.statusAtCall || 'new_lead',
           callDate: body.callDate ?? null,
           followUpDate: body.followUpDate,
           followUpTime: body.followUpTime,
           actor: access.viewerName,
         },
-        access
+        {
+          ...access,
+          isSuperAdmin: req.dbUser!.role === 'super_admin',
+        }
       );
       if (!updated) {
         res.status(404).json({ error: 'Lead not found.' });
@@ -2098,7 +2413,10 @@ app.post(
           followUpDate: body.followUpDate ?? null,
           followUpTime: body.followUpTime ?? null,
         },
-        access
+        {
+          ...access,
+          isSuperAdmin: req.dbUser!.role === 'super_admin',
+        }
       );
       if (!updated) {
         res.status(404).json({ error: 'Lead not found.' });
@@ -2176,8 +2494,11 @@ app.post(
       const body = req.body as {
         ownerUserId?: number | null;
         rows?: Array<{
+          leadCode?: string;
           name?: string;
           phone?: string;
+          email?: string;
+          leadType?: string;
           remark?: string;
           status?: string;
           source?: string;
@@ -2277,6 +2598,7 @@ app.post(
   '/api/leads/bulk-delete',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   async (req: AuthRequest, res) => {
     try {
       const access = getLeadAccessContext(req);
@@ -2305,6 +2627,7 @@ app.delete(
   '/api/leads/:id',
   requireAdminSession,
   requirePasswordChanged,
+  requireSuperAdmin,
   async (req: AuthRequest, res) => {
     try {
       const id = Number(req.params.id);
@@ -2329,6 +2652,505 @@ app.delete(
     }
   }
 );
+
+// =========================================================================
+// KNOWLEDGEBASE ROUTES
+// =========================================================================
+app.get(
+  '/api/knowledgebase',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req, res) => {
+    try {
+      const category =
+        typeof req.query.category === 'string' ? req.query.category : undefined;
+      const items = await fetchKnowledgebaseArticles(category);
+      res.json(items);
+    } catch (error) {
+      console.error('GET /api/knowledgebase failed:', error);
+      res.status(500).json({ error: 'Failed to load knowledgebase articles.' });
+    }
+  }
+);
+
+app.get(
+  '/api/knowledgebase/images/:id',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).end();
+        return;
+      }
+      const img = await fetchKnowledgebaseImageById(id);
+      if (!img) {
+        res.status(404).end();
+        return;
+      }
+      const safeMime = ALLOWED_KB_IMAGE_MIMES.has(img.mimeType)
+        ? img.mimeType
+        : 'image/png';
+      const buffer = Buffer.from(img.dataBase64, 'base64');
+      res.setHeader('Content-Type', safeMime);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, max-age=86400');
+      res.send(buffer);
+    } catch (error) {
+      console.error('GET /api/knowledgebase/images/:id failed:', error);
+      res.status(500).end();
+    }
+  }
+);
+
+app.post(
+  '/api/knowledgebase/images',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  kbImageUpload.single('image'),
+  async (req: AuthRequest, res) => {
+    try {
+      if (!req.file) {
+        res.status(400).json({ error: 'Please select an image file to upload.' });
+        return;
+      }
+      const ext = path.extname(req.file.originalname).toLowerCase();
+      const rawMime = (req.file.mimetype || '').toLowerCase();
+      const mimeType = ALLOWED_KB_IMAGE_MIMES.has(rawMime)
+        ? rawMime
+        : ALLOWED_KB_IMAGE_EXTENSIONS.get(ext) || 'image/png';
+
+      const actor = req.dbUser!.displayName || req.dbUser!.username;
+      const saved = await saveKnowledgebaseImage({
+        mimeType,
+        filename: req.file.originalname,
+        dataBase64: req.file.buffer.toString('base64'),
+        actor,
+      });
+      res.status(201).json(saved);
+    } catch (error) {
+      console.error('POST /api/knowledgebase/images failed:', error);
+      res.status(400).json({
+        error: error instanceof Error ? error.message : 'Failed to upload image.',
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/knowledgebase',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const body = req.body as {
+        category?: string;
+        title?: string;
+        summary?: string | null;
+        content?: string;
+        tags?: string | null;
+        isPinned?: boolean;
+      };
+      const actor = req.dbUser!.displayName || req.dbUser!.username;
+      const created = await createKnowledgebaseArticle({
+        category: body.category || 'product_documentation',
+        title: body.title || '',
+        summary: body.summary ?? null,
+        content: body.content || '',
+        tags: body.tags ?? null,
+        isPinned: Boolean(body.isPinned),
+        actor,
+      });
+      res.status(201).json(created);
+    } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : 'Failed to create article.';
+      res.status(400).json({ error: msg });
+    }
+  }
+);
+
+app.put(
+  '/api/knowledgebase/:id',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'Invalid article ID.' });
+        return;
+      }
+      const body = req.body as {
+        category?: string;
+        title?: string;
+        summary?: string | null;
+        content?: string;
+        tags?: string | null;
+        isPinned?: boolean;
+      };
+      const actor = req.dbUser!.displayName || req.dbUser!.username;
+      const updated = await updateKnowledgebaseArticle(id, {
+        ...body,
+        actor,
+      });
+      if (!updated) {
+        res.status(404).json({ error: 'Article not found.' });
+        return;
+      }
+      res.json(updated);
+    } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : 'Failed to update article.';
+      res.status(400).json({ error: msg });
+    }
+  }
+);
+
+app.delete(
+  '/api/knowledgebase/:id',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'Invalid article ID.' });
+        return;
+      }
+      const deleted = await deleteKnowledgebaseArticle(id);
+      if (!deleted) {
+        res.status(404).json({ error: 'Article not found.' });
+        return;
+      }
+      res.json({ deleted: true, id });
+    } catch (error) {
+      console.error('DELETE /api/knowledgebase/:id failed:', error);
+      res.status(500).json({ error: 'Failed to delete article.' });
+    }
+  }
+);
+
+// =========================================================================
+// COMMUNICATION CENTER ROUTES
+// =========================================================================
+app.get(
+  '/api/communication-templates',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req, res) => {
+    try {
+      const category =
+        typeof req.query.category === 'string' ? req.query.category : undefined;
+      const items = await fetchCommunicationTemplates(category);
+      res.json(items);
+    } catch (error) {
+      console.error('GET /api/communication-templates failed:', error);
+      res.status(500).json({ error: 'Failed to load communication templates.' });
+    }
+  }
+);
+
+app.post(
+  '/api/communication-templates',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const body = req.body as {
+        category?: string;
+        title?: string;
+        subject?: string | null;
+        content?: string;
+        tags?: string | null;
+      };
+      const actor = req.dbUser!.displayName || req.dbUser!.username;
+      const created = await createCommunicationTemplate({
+        category: body.category || 'whatsapp_templates',
+        title: body.title || '',
+        subject: body.subject ?? null,
+        content: body.content || '',
+        tags: body.tags ?? null,
+        actor,
+      });
+      res.status(201).json(created);
+    } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : 'Failed to create template.';
+      res.status(400).json({ error: msg });
+    }
+  }
+);
+
+app.put(
+  '/api/communication-templates/:id',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'Invalid template ID.' });
+        return;
+      }
+      const body = req.body as {
+        category?: string;
+        title?: string;
+        subject?: string | null;
+        content?: string;
+        tags?: string | null;
+      };
+      const actor = req.dbUser!.displayName || req.dbUser!.username;
+      const updated = await updateCommunicationTemplate(id, {
+        ...body,
+        actor,
+      });
+      if (!updated) {
+        res.status(404).json({ error: 'Template not found.' });
+        return;
+      }
+      res.json(updated);
+    } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : 'Failed to update template.';
+      res.status(400).json({ error: msg });
+    }
+  }
+);
+
+app.delete(
+  '/api/communication-templates/:id',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'Invalid template ID.' });
+        return;
+      }
+      const deleted = await deleteCommunicationTemplate(id);
+      if (!deleted) {
+        res.status(404).json({ error: 'Template not found.' });
+        return;
+      }
+      res.json({ deleted: true, id });
+    } catch (error) {
+      console.error('DELETE /api/communication-templates/:id failed:', error);
+      res.status(500).json({ error: 'Failed to delete template.' });
+    }
+  }
+);
+
+// =========================================================================
+// REPORTS & ANALYTICS ROUTES
+// =========================================================================
+app.get(
+  '/api/reports',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (req: AuthRequest, res) => {
+    try {
+      const monthKey =
+        typeof req.query.month === 'string' ? req.query.month : undefined;
+      const report = await fetchReportsAnalytics({
+        viewerUserId: req.dbUser!.id,
+        isSuperAdmin: req.dbUser!.role === 'super_admin',
+        monthKey,
+      });
+      res.json(report);
+    } catch (error) {
+      console.error('GET /api/reports failed:', error);
+      res.status(500).json({ error: 'Failed to load reports & analytics.' });
+    }
+  }
+);
+
+// =========================================================================
+// TEAM MANAGEMENT ROUTES (DEPARTMENTS & TARGETS — SUPER ADMIN)
+// =========================================================================
+app.get(
+  '/api/team/departments',
+  requireAdminSession,
+  requirePasswordChanged,
+  async (_req, res) => {
+    try {
+      const items = await fetchDepartments();
+      res.json(items);
+    } catch (error) {
+      console.error('GET /api/team/departments failed:', error);
+      res.status(500).json({ error: 'Failed to load departments.' });
+    }
+  }
+);
+
+app.post(
+  '/api/team/departments',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  async (req, res) => {
+    try {
+      const body = req.body as {
+        name?: string;
+        description?: string | null;
+        leadName?: string | null;
+      };
+      const created = await createDepartmentRecord({
+        name: body.name || '',
+        description: body.description ?? null,
+        leadName: body.leadName ?? null,
+      });
+      res.status(201).json(created);
+    } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : 'Failed to create department.';
+      res.status(400).json({ error: msg });
+    }
+  }
+);
+
+app.put(
+  '/api/team/departments/:id',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'Invalid department ID.' });
+        return;
+      }
+      const body = req.body as {
+        name?: string;
+        description?: string | null;
+        leadName?: string | null;
+      };
+      const updated = await updateDepartmentRecord(id, body);
+      if (!updated) {
+        res.status(404).json({ error: 'Department not found.' });
+        return;
+      }
+      res.json(updated);
+    } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : 'Failed to update department.';
+      res.status(400).json({ error: msg });
+    }
+  }
+);
+
+app.delete(
+  '/api/team/departments/:id',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'Invalid department ID.' });
+        return;
+      }
+      const deleted = await deleteDepartmentRecord(id);
+      if (!deleted) {
+        res.status(404).json({ error: 'Department not found.' });
+        return;
+      }
+      res.json({ deleted: true, id });
+    } catch (error) {
+      console.error('DELETE /api/team/departments/:id failed:', error);
+      res.status(500).json({ error: 'Failed to delete department.' });
+    }
+  }
+);
+
+app.get(
+  '/api/team/targets',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  async (req, res) => {
+    try {
+      const monthKey =
+        typeof req.query.month === 'string' ? req.query.month : undefined;
+      const items = await fetchTeamTargets(monthKey);
+      res.json(items);
+    } catch (error) {
+      console.error('GET /api/team/targets failed:', error);
+      res.status(500).json({ error: 'Failed to load team targets.' });
+    }
+  }
+);
+
+app.post(
+  '/api/team/targets',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  async (req: AuthRequest, res) => {
+    try {
+      const body = req.body as {
+        userId?: number;
+        monthKey?: string;
+        leadsTarget?: number;
+        wonTarget?: number;
+        revenueTarget?: number;
+        notes?: string | null;
+      };
+      const actor = req.dbUser!.displayName || req.dbUser!.username;
+      const saved = await upsertTeamTargetRecord({
+        userId: Number(body.userId),
+        monthKey: body.monthKey || '',
+        leadsTarget: Number(body.leadsTarget) || 0,
+        wonTarget: Number(body.wonTarget) || 0,
+        revenueTarget: Number(body.revenueTarget) || 0,
+        notes: body.notes ?? null,
+        actor,
+      });
+      res.json(saved);
+    } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : 'Failed to save team target.';
+      res.status(400).json({ error: msg });
+    }
+  }
+);
+
+app.delete(
+  '/api/team/targets/:id',
+  requireAdminSession,
+  requirePasswordChanged,
+  requireSuperAdmin,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        res.status(400).json({ error: 'Invalid target ID.' });
+        return;
+      }
+      const deleted = await deleteTeamTargetRecord(id);
+      if (!deleted) {
+        res.status(404).json({ error: 'Team target not found.' });
+        return;
+      }
+      res.json({ deleted: true, id });
+    } catch (error) {
+      console.error('DELETE /api/team/targets/:id failed:', error);
+      res.status(500).json({ error: 'Failed to delete team target.' });
+    }
+  }
+);
+
 
 // Public webhook endpoint for inbound CRM / WhatsApp leads (authenticated via shared secret)
 async function handleInboundLeadWebhook(req: Request, res: Response) {

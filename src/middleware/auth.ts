@@ -11,6 +11,7 @@ export interface DbAdminUser {
   email: string;
   displayName: string | null;
   role: UserRole;
+  avatarUrl?: string | null;
   mustChangePassword: boolean;
   isActive: boolean;
   createdAt: string;
@@ -86,6 +87,7 @@ export const requireAdminSession = async (
       email: u.email,
       displayName: u.displayName,
       role: u.role as UserRole,
+      avatarUrl: u.avatarUrl ?? null,
       mustChangePassword: u.mustChangePassword,
       isActive: u.isActive,
       createdAt: u.createdAt.toISOString(),

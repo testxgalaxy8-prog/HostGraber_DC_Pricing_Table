@@ -2,13 +2,16 @@ import { useCallback, useEffect, useState } from 'react';
 import { KeyRound, ShieldCheck, UserPlus } from 'lucide-react';
 import { apiFetch } from '../../lib/api.ts';
 import { useAuth } from '../../context/AuthContext.tsx';
+import { UserAvatar } from '../UserAvatar.tsx';
 import type { PortalUser, UserRole } from '../../shared/types.ts';
 
 export function UserManagementView({
   currentUser,
+  showOwnPasswordSection = false,
   onToast,
 }: {
   currentUser: PortalUser;
+  showOwnPasswordSection?: boolean;
   onToast: (type: 'success' | 'error', text: string) => void;
 }) {
   const { changeOwnPassword } = useAuth();
@@ -209,6 +212,7 @@ export function UserManagementView({
       </div>
 
       {/* Change Own Password */}
+      {showOwnPasswordSection && (
       <section className="bg-white border border-[#E2E8F0] rounded-lg p-6">
         <div className="flex items-center gap-2 mb-4">
           <KeyRound className="w-4 h-4 text-[#059669]" />
@@ -272,6 +276,7 @@ export function UserManagementView({
           </button>
         </form>
       </section>
+      )}
 
       {/* Create New Admin User (Super Admin Only) */}
       {isSuperAdmin ? (
@@ -396,15 +401,24 @@ export function UserManagementView({
                 {users.map((u) => (
                   <tr key={u.id} className="hover:bg-[#F8FAFC] transition-colors">
                     <td className="py-3 px-5">
-                      <div className="font-semibold text-[#0F172A]">
-                        {u.displayName || u.username}
-                        {u.id === currentUser.id && (
-                          <span className="ml-2 text-xs font-semibold text-[#059669]">
-                            (You)
-                          </span>
-                        )}
+                      <div className="flex items-center gap-3">
+                        <UserAvatar
+                          avatarUrl={u.avatarUrl}
+                          name={u.displayName || u.username}
+                          size="sm"
+                        />
+                        <div>
+                          <div className="font-semibold text-[#0F172A]">
+                            {u.displayName || u.username}
+                            {u.id === currentUser.id && (
+                              <span className="ml-2 text-xs font-semibold text-[#059669]">
+                                (You)
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-[#64748B]">{u.email}</div>
+                        </div>
                       </div>
-                      <div className="text-xs text-[#64748B]">{u.email}</div>
                     </td>
                     <td className="py-3 px-4 font-mono-tabular text-xs text-[#475569]">
                       {u.username}

@@ -16,10 +16,14 @@ type LogoTarget = 'brand' | 'pdf';
 
 export function LogoManagementView({
   settings,
+  embedded = false,
+  readOnly = false,
   onSaved,
   onToast,
 }: {
   settings: PortalSettings;
+  embedded?: boolean;
+  readOnly?: boolean;
   onSaved: () => Promise<void>;
   onToast: (type: 'success' | 'error', text: string) => void;
 }) {
@@ -125,6 +129,7 @@ export function LogoManagementView({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (readOnly) return;
     setSaving(true);
     try {
       if (isBrandTab) {
@@ -190,6 +195,7 @@ export function LogoManagementView({
   };
 
   const handleReset = async () => {
+    if (readOnly) return;
     setResetting(true);
     try {
       await apiFetch<PortalSettings>(`/api/admin/logo?target=${activeTarget}`, {
@@ -231,14 +237,16 @@ export function LogoManagementView({
 
   return (
     <div className="space-y-6 max-w-5xl">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight text-[#0F172A]">
-          Logo Management
-        </h1>
-        <p className="text-sm text-[#64748B] mt-1">
-          Manage your brand logo for the sidebar and sign-in screen, or set a dedicated logo for exported PDF quotations.
-        </p>
-      </div>
+      {!embedded && (
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight text-[#0F172A]">
+            Logo Management
+          </h1>
+          <p className="text-xs text-[#64748B] mt-0.5">
+            Sidebar, login &amp; PDF quotation branding
+          </p>
+        </div>
+      )}
 
       {/* Target Switcher */}
       <div className="inline-flex flex-wrap gap-2 p-1 bg-white border border-[#E2E8F0] rounded-xl">
@@ -287,10 +295,10 @@ export function LogoManagementView({
           className="lg:col-span-7 bg-white border border-[#E2E8F0] rounded-xl p-6 space-y-6"
         >
           {!isBrandTab && (
-            <div className="p-3.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] text-xs text-[#475569]">
+            <div className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] text-xs text-[#475569]">
               {settings.pdfLogoUrl
-                ? 'A dedicated PDF Quotation Logo is currently active. Click "Use Brand Logo" below at any time to inherit the main Brand Logo.'
-                : 'Currently inheriting the Brand Logo for PDF quotations. Upload an image or paste a URL below to use a different logo specifically on PDF exports.'}
+                ? 'Custom PDF logo active.'
+                : 'Currently inheriting the Brand Logo for PDF quotations.'}
             </div>
           )}
 
@@ -302,34 +310,41 @@ export function LogoManagementView({
             <input
               ref={fileInputRef}
               type="file"
+              disabled={readOnly}
               accept=".png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml"
               onChange={(e) => handleFilePicked(e.target.files?.[0])}
               className="sr-only"
             />
             <div
               role="button"
-              tabIndex={0}
-              onClick={() => fileInputRef.current?.click()}
+              tabIndex={readOnly ? -1 : 0}
+              onClick={() => {
+                if (!readOnly) fileInputRef.current?.click();
+              }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
+                if (!readOnly && (e.key === 'Enter' || e.key === ' ')) {
                   e.preventDefault();
                   fileInputRef.current?.click();
                 }
               }}
               onDragOver={(e) => {
+                if (readOnly) return;
                 e.preventDefault();
                 setDragActive(true);
               }}
               onDragLeave={() => setDragActive(false)}
               onDrop={(e) => {
+                if (readOnly) return;
                 e.preventDefault();
                 setDragActive(false);
                 handleFilePicked(e.dataTransfer.files?.[0]);
               }}
-              className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors cursor-pointer ${
-                dragActive
-                  ? 'border-[#17C964] bg-[#ECFDF5]/60'
-                  : 'border-[#CBD5E1] bg-[#F8FAFC] hover:border-[#94A3B8]'
+              className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${
+                readOnly
+                  ? 'border-[#E2E8F0] bg-[#F8FAFC] opacity-60 cursor-not-allowed'
+                  : dragActive
+                    ? 'border-[#17C964] bg-[#ECFDF5]/60 cursor-pointer'
+                    : 'border-[#CBD5E1] bg-[#F8FAFC] hover:border-[#94A3B8] cursor-pointer'
               }`}
             >
               <div className="w-10 h-10 rounded-lg bg-white border border-[#E2E8F0] flex items-center justify-center mx-auto text-[#059669]">
@@ -343,7 +358,7 @@ export function LogoManagementView({
               <div className="mt-1 text-xs text-[#64748B]">
                 PNG, JPG, WEBP, or SVG up to 2 MB
               </div>
-              {currentSelectedFile && (
+              {currentSelectedFile && !readOnly && (
                 <button
                   type="button"
                   onClick={(e) => {
@@ -372,6 +387,7 @@ export function LogoManagementView({
             </label>
             <input
               type="text"
+              disabled={readOnly}
               value={currentUrlInput}
               onChange={(e) => {
                 if (isBrandTab) {
@@ -385,11 +401,8 @@ export function LogoManagementView({
                 }
               }}
               placeholder="https://example.com/logo.png"
-              className="w-full px-3.5 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:bg-white focus:border-[#17C964]"
+              className="w-full px-3.5 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] placeholder:text-[#94A3B8] disabled:opacity-60 focus:outline-none focus:bg-white focus:border-[#17C964]"
             />
-            <p className="mt-1 text-xs text-[#64748B]">
-              Leave empty to keep your uploaded file or use a hosted HTTPS image URL.
-            </p>
           </div>
 
           {/* Sidebar Display Style (only on Brand tab) */}
@@ -401,12 +414,13 @@ export function LogoManagementView({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button
                   type="button"
+                  disabled={readOnly}
                   onClick={() => setShowCompanyName(true)}
-                  className={`p-3 rounded-lg border text-left transition-colors cursor-pointer ${
+                  className={`p-3 rounded-lg border text-left transition-colors disabled:opacity-60 ${
                     showCompanyName
                       ? 'border-[#17C964] bg-[#ECFDF5]/60'
                       : 'border-[#E2E8F0] bg-white hover:bg-[#F8FAFC]'
-                  }`}
+                  } ${readOnly ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                 >
                   <div className="text-sm font-medium text-[#0F172A]">
                     Logo + Company Name
@@ -418,12 +432,13 @@ export function LogoManagementView({
 
                 <button
                   type="button"
+                  disabled={readOnly}
                   onClick={() => setShowCompanyName(false)}
-                  className={`p-3 rounded-lg border text-left transition-colors cursor-pointer ${
+                  className={`p-3 rounded-lg border text-left transition-colors disabled:opacity-60 ${
                     !showCompanyName
                       ? 'border-[#17C964] bg-[#ECFDF5]/60'
                       : 'border-[#E2E8F0] bg-white hover:bg-[#F8FAFC]'
-                  }`}
+                  } ${readOnly ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                 >
                   <div className="text-sm font-medium text-[#0F172A]">
                     Full Logo Only
@@ -437,38 +452,40 @@ export function LogoManagementView({
           )}
 
           {/* Actions */}
-          <div className="pt-4 border-t border-[#E2E8F0] flex flex-wrap items-center justify-between gap-3">
-            <button
-              type="button"
-              onClick={handleReset}
-              disabled={resetting || !canReset}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-[#334155] bg-white border border-[#CBD5E1] hover:bg-[#F8FAFC] disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>
-                {resetting
-                  ? 'Resetting...'
-                  : isBrandTab
-                    ? 'Reset to Default'
-                    : 'Use Brand Logo'}
-              </span>
-            </button>
+          {!readOnly && (
+            <div className="pt-4 border-t border-[#E2E8F0] flex flex-wrap items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={handleReset}
+                disabled={resetting || !canReset}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-[#334155] bg-white border border-[#CBD5E1] hover:bg-[#F8FAFC] disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>
+                  {resetting
+                    ? 'Resetting...'
+                    : isBrandTab
+                      ? 'Reset to Default'
+                      : 'Use Brand Logo'}
+                </span>
+              </button>
 
-            <button
-              type="submit"
-              disabled={saving}
-              className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] disabled:opacity-60 rounded-lg transition-colors cursor-pointer"
-            >
-              <Save className="w-4 h-4" />
-              <span>
-                {saving
-                  ? 'Saving...'
-                  : isBrandTab
-                    ? 'Save Brand Logo'
-                    : 'Save PDF Logo'}
-              </span>
-            </button>
-          </div>
+              <button
+                type="submit"
+                disabled={saving}
+                className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] disabled:opacity-60 rounded-lg transition-colors cursor-pointer"
+              >
+                <Save className="w-4 h-4" />
+                <span>
+                  {saving
+                    ? 'Saving...'
+                    : isBrandTab
+                      ? 'Save Brand Logo'
+                      : 'Save PDF Logo'}
+                </span>
+              </button>
+            </div>
+          )}
         </form>
 
         {/* Live Preview Panel */}

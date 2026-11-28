@@ -1,73 +1,67 @@
 import { useEffect, useState } from 'react';
 import {
-  FileSpreadsheet,
   ArrowRight,
-  Server,
-  Layers,
-  UploadCloud,
-  ReceiptIndianRupee,
+  FileSpreadsheet,
+  PhoneCall,
 } from 'lucide-react';
 import { apiFetch } from '../../lib/api.ts';
 import { formatCurrencyValue } from '../../shared/quotation.ts';
+import {
+  LEAD_SOURCE_LABELS,
+  LEAD_STATUS_META,
+  formatLeadDisplayDate,
+} from '../../shared/leads.ts';
 import type {
+  CombinedDashboardData,
   HostingPlanFull,
-  ImportHistoryItem,
   PortalSettings,
   PortalUser,
 } from '../../shared/types.ts';
 
-interface DashboardData {
-  totalPlans: number;
-  activePlans: number;
-  inactivePlans: number;
-  lastExcelUpload: ImportHistoryItem | null;
-  recentlyUpdatedPlans: HostingPlanFull[];
-}
+export type DashboardTargetTab =
+  | 'dashboard'
+  | 'leads'
+  | 'upload'
+  | 'plans'
+  | 'history'
+  | 'reports'
+  | 'team'
+  | 'integrations'
+  | 'logs'
+  | 'profile'
+  | 'settings';
 
 export function AdminDashboard({
   user,
   settings,
-  categoriesCount,
   onNavigate,
+  onOpenLead,
   onViewPlan,
   onEditPlan,
 }: {
   user: PortalUser;
   settings: PortalSettings;
-  categoriesCount: number;
-  onNavigate: (
-    tab:
-      | 'dashboard'
-      | 'upload'
-      | 'plans'
-      | 'history'
-      | 'users'
-      | 'logo'
-      | 'settings'
-  ) => void;
+  onNavigate: (tab: DashboardTargetTab) => void;
+  onOpenLead?: (leadId: number) => void;
   onViewPlan: (plan: HostingPlanFull) => void;
   onEditPlan: (plan: HostingPlanFull) => void;
 }) {
-  const [data, setData] = useState<DashboardData | null>(null);
+  const [data, setData] = useState<CombinedDashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [now, setNow] = useState(() => new Date());
-
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), 60_000);
-    return () => window.clearInterval(id);
-  }, []);
 
   useEffect(() => {
     let mounted = true;
     setLoading(true);
-    apiFetch<DashboardData>('/api/dashboard')
+    apiFetch<CombinedDashboardData>('/api/dashboard')
       .then((res) => {
         if (mounted) setData(res);
       })
       .catch((err) => {
         if (mounted) {
-          setError(err instanceof Error ? err.message : 'Failed to load dashboard.');
+          setError(
+            err instanceof Error ? err.message : 'Failed to load dashboard.'
+          );
         }
       })
       .finally(() => {
@@ -79,328 +73,676 @@ export function AdminDashboard({
   }, []);
 
   const displayName = user.displayName || user.username;
-  const initials = displayName
-    .split(/[\s._-]+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() || '')
-    .join('') || 'HG';
-
-  const formattedTime = now.toLocaleTimeString('en-IN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
-  const formattedDay = now.toLocaleDateString('en-IN', {
+  const todayLabel = new Date().toLocaleDateString('en-IN', {
     weekday: 'long',
+    day: '2-digit',
+    month: 'short',
   });
 
   if (loading) {
     return (
-      <div className="space-y-5 animate-pulse">
-        <div className="h-10 bg-white border border-[#E2E8F0] rounded-lg w-72" />
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-          <div className="lg:col-span-5 bg-white border border-[#E2E8F0] rounded-lg h-48" />
-          <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {[1, 2, 3, 4].map((i) => (
-              <div
-                key={i}
-                className="bg-white border border-[#E2E8F0] rounded-lg h-24"
-              />
-            ))}
+      <div className="space-y-6 animate-pulse">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="space-y-2">
+            <div className="h-7 bg-white border border-[#E2E8F0] rounded-lg w-60" />
+            <div className="h-4 bg-white border border-[#E2E8F0] rounded w-44" />
           </div>
+          <div className="h-9 bg-white border border-[#E2E8F0] rounded-lg w-56" />
         </div>
-        <div className="bg-white border border-[#E2E8F0] rounded-lg p-6 h-64" />
+        <div className="bg-white border border-[#E2E8F0] rounded-xl h-28" />
+        <div className="bg-white border border-[#E2E8F0] rounded-xl h-64" />
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+          <div className="xl:col-span-8 bg-white border border-[#E2E8F0] rounded-xl h-64" />
+          <div className="xl:col-span-4 bg-white border border-[#E2E8F0] rounded-xl h-64" />
+        </div>
       </div>
     );
   }
 
   if (error || !data) {
     return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-5 text-sm text-red-700">
+      <div className="bg-red-50 border border-red-200 rounded-xl p-5 text-sm text-red-700">
         {error || 'Unable to load dashboard.'}
       </div>
     );
   }
 
-  const lastUpload = data.lastExcelUpload;
+  const { leadSummary, catalogSummary } = data;
+  const lastUpload = catalogSummary.recentImports[0] || null;
+  const inactivePlans = Math.max(
+    0,
+    catalogSummary.totalPlans - catalogSummary.activePlans
+  );
+
+  const pipelineStats = [
+    {
+      label: 'Total Leads',
+      value: leadSummary.totalLeads,
+      sub: 'All active records',
+      valueClass: 'text-[#0F172A]',
+    },
+    {
+      label: 'New Today',
+      value: leadSummary.newToday,
+      sub: 'Added today',
+      valueClass: 'text-[#2563EB]',
+    },
+    {
+      label: 'Follow-ups',
+      value: leadSummary.followUpsDue,
+      sub: 'Due today',
+      valueClass: 'text-[#D97706]',
+    },
+    {
+      label: 'Overdue',
+      value: leadSummary.overdue,
+      sub: 'Past follow-up',
+      valueClass: 'text-[#DC2626]',
+    },
+    {
+      label: 'Positive',
+      value: leadSummary.positiveCount,
+      sub: 'Active interest',
+      valueClass: 'text-[#059669]',
+    },
+    {
+      label: 'Won Deals',
+      value: leadSummary.wonCount,
+      sub: 'Converted clients',
+      valueClass: 'text-[#047857]',
+    },
+  ];
 
   return (
-    <div className="space-y-5">
-      {/* Welcome & Action Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-xl font-semibold tracking-tight text-[#0F172A]">
-          Welcome, {displayName}
-        </h1>
+    <div className="space-y-6">
+      {/* Executive Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-[#0F172A] truncate">
+            Welcome back, {displayName}
+          </h1>
+          <p className="text-xs text-[#64748B] mt-1">
+            {user.role === 'super_admin' ? 'Super Admin' : 'Admin'} ·{' '}
+            {settings.companyName} · {todayLabel}
+          </p>
+        </div>
 
-        <div className="flex items-center gap-4">
-          <div className="text-right hidden sm:block">
-            <div className="text-sm font-semibold text-[#0F172A] font-mono-tabular leading-tight">
-              {formattedTime}
-            </div>
-            <div className="text-xs text-[#64748B]">{formattedDay}</div>
-          </div>
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           <button
             type="button"
-            onClick={() => onNavigate('upload')}
-            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            onClick={() => onNavigate('leads')}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#334155] bg-white border border-[#CBD5E1] hover:bg-[#F8FAFC] rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
           >
-            <FileSpreadsheet className="w-4 h-4" />
-            <span>Upload Excel</span>
+            <PhoneCall className="w-3.5 h-3.5 text-[#059669]" />
+            <span>Open Lead CRM</span>
+          </button>
+          {user.role === 'super_admin' && (
+            <button
+              type="button"
+              onClick={() => onNavigate('upload')}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Upload Excel</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Section 1: Unified Pipeline KPI Strip */}
+      <section className="bg-white border border-[#E2E8F0] rounded-xl overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-[#E2E8F0] flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-[#0F172A]">
+            Lead Pipeline Summary
+          </h2>
+          <button
+            type="button"
+            onClick={() => onNavigate('reports')}
+            className="inline-flex items-center gap-1 text-xs font-semibold text-[#059669] hover:text-[#047857] hover:underline cursor-pointer whitespace-nowrap"
+          >
+            <span>Full Analytics</span>
+            <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
-      </div>
 
-      {/* Top Grid: Profile / Summary Card (left) + 2x2 KPI Cards (right) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
-        {/* Profile & Catalog Summary Card */}
-        <section className="lg:col-span-5 bg-white border border-[#E2E8F0] rounded-xl flex flex-col justify-between">
-          <div className="p-6 flex items-center gap-4">
-            <div className="w-14 h-14 rounded-xl bg-[#14181F] text-[#17C964] font-mono-tabular font-bold text-base flex items-center justify-center shrink-0">
-              {initials}
-            </div>
-            <div className="min-w-0">
-              <div className="text-base font-semibold text-[#0F172A] truncate">
-                {displayName}
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-px bg-[#E2E8F0]">
+          {pipelineStats.map((stat) => (
+            <div key={stat.label} className="bg-white px-4 py-4 sm:px-5">
+              <div className="text-xs font-medium text-[#64748B] whitespace-nowrap">
+                {stat.label}
               </div>
-              <div className="text-xs text-[#64748B] mt-0.5">
-                {user.role === 'super_admin' ? 'Super Admin' : 'Admin'} ·{' '}
-                {settings.companyName}
+              <div
+                className={`mt-1.5 font-mono-tabular text-2xl font-bold leading-none ${stat.valueClass}`}
+              >
+                {stat.value}
               </div>
-              <div className="text-xs text-[#64748B] truncate mt-0.5 font-mono-tabular">
-                {user.email}
+              <div className="mt-2 text-[11px] text-[#94A3B8] whitespace-nowrap">
+                {stat.sub}
               </div>
             </div>
-          </div>
-
-          <div className="border-t border-[#E2E8F0] grid grid-cols-3 divide-x divide-[#E2E8F0] bg-[#F8FAFC] rounded-b-xl">
-            <div className="px-4 py-3.5">
-              <div className="text-xs text-[#64748B]">Total Plans</div>
-              <div className="mt-1 font-mono-tabular text-lg font-bold text-[#0F172A]">
-                {data.totalPlans}
-              </div>
-            </div>
-            <div className="px-4 py-3.5">
-              <div className="text-xs text-[#64748B]">Active</div>
-              <div className="mt-1 font-mono-tabular text-lg font-bold text-[#059669]">
-                {data.activePlans}
-              </div>
-            </div>
-            <div className="px-4 py-3.5">
-              <div className="text-xs text-[#64748B]">Inactive</div>
-              <div className="mt-1 font-mono-tabular text-lg font-bold text-[#DC2626]">
-                {data.inactivePlans}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Right 2x2 KPI Cards */}
-        <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-5">
-          <div className="bg-white border border-[#E2E8F0] rounded-xl p-5 flex items-start justify-between gap-3">
-            <div>
-              <div className="text-xs font-medium text-[#64748B]">Hosting Plans</div>
-              <div className="mt-3 flex items-baseline gap-6">
-                <div>
-                  <div className="font-mono-tabular text-2xl font-bold text-[#2563EB]">
-                    {data.activePlans}
-                  </div>
-                  <div className="text-xs text-[#64748B] mt-0.5">Active</div>
-                </div>
-                <div>
-                  <div className="font-mono-tabular text-2xl font-bold text-[#DC2626]">
-                    {data.inactivePlans}
-                  </div>
-                  <div className="text-xs text-[#64748B] mt-0.5">Inactive</div>
-                </div>
-              </div>
-            </div>
-            <Server className="w-5 h-5 text-[#94A3B8] shrink-0 mt-1" />
-          </div>
-
-          <div className="bg-white border border-[#E2E8F0] rounded-xl p-5 flex items-start justify-between gap-3">
-            <div>
-              <div className="text-xs font-medium text-[#64748B]">
-                Categories &amp; Terms
-              </div>
-              <div className="mt-3 flex items-baseline gap-6">
-                <div>
-                  <div className="font-mono-tabular text-2xl font-bold text-[#2563EB]">
-                    {categoriesCount}
-                  </div>
-                  <div className="text-xs text-[#64748B] mt-0.5">Categories</div>
-                </div>
-                <div>
-                  <div className="font-mono-tabular text-2xl font-bold text-[#059669]">
-                    6
-                  </div>
-                  <div className="text-xs text-[#64748B] mt-0.5">Tenures</div>
-                </div>
-              </div>
-            </div>
-            <Layers className="w-5 h-5 text-[#94A3B8] shrink-0 mt-1" />
-          </div>
-
-          <div className="bg-white border border-[#E2E8F0] rounded-xl p-5 flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-xs font-medium text-[#64748B]">
-                Last Upload
-              </div>
-              <div className="mt-3 flex items-baseline gap-6">
-                <div>
-                  <div className="font-mono-tabular text-2xl font-bold text-[#2563EB]">
-                    {lastUpload ? lastUpload.newPlansImported : 0}
-                  </div>
-                  <div className="text-xs text-[#64748B] mt-0.5">Added</div>
-                </div>
-                <div>
-                  <div className="font-mono-tabular text-2xl font-bold text-[#059669]">
-                    {lastUpload ? lastUpload.existingPlansUpdated : 0}
-                  </div>
-                  <div className="text-xs text-[#64748B] mt-0.5">Updated</div>
-                </div>
-              </div>
-            </div>
-            <UploadCloud className="w-5 h-5 text-[#94A3B8] shrink-0 mt-1" />
-          </div>
-
-          <div className="bg-white border border-[#E2E8F0] rounded-xl p-5 flex items-start justify-between gap-3">
-            <div>
-              <div className="text-xs font-medium text-[#64748B]">
-                Tax &amp; Currency
-              </div>
-              <div className="mt-3 flex items-baseline gap-6">
-                <div>
-                  <div className="font-mono-tabular text-2xl font-bold text-[#0F172A]">
-                    {settings.defaultTaxRate}%
-                  </div>
-                  <div className="text-xs text-[#64748B] mt-0.5">GST</div>
-                </div>
-                <div>
-                  <div className="font-mono-tabular text-2xl font-bold text-[#059669]">
-                    {settings.currencyCode}
-                  </div>
-                  <div className="text-xs text-[#64748B] mt-0.5">
-                    {settings.currencySymbol}
-                  </div>
-                </div>
-              </div>
-            </div>
-            <ReceiptIndianRupee className="w-5 h-5 text-[#94A3B8] shrink-0 mt-1" />
-          </div>
+          ))}
         </div>
-      </div>
+      </section>
 
-      {/* Recently Updated Plans Table */}
+      {/* Section 2: Recent Active Leads */}
       <section className="bg-white border border-[#E2E8F0] rounded-xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-[#E2E8F0] flex items-center justify-between gap-4">
-          <h2 className="text-base font-semibold text-[#0F172A]">
-            Recently Updated Plans
+        <div className="px-5 py-3.5 border-b border-[#E2E8F0] flex items-center justify-between gap-4">
+          <h2 className="text-sm font-semibold text-[#0F172A]">
+            Recent Active Leads
+          </h2>
+          <button
+            type="button"
+            onClick={() => onNavigate('leads')}
+            className="inline-flex items-center gap-1 text-xs font-semibold text-[#059669] hover:text-[#047857] hover:underline cursor-pointer whitespace-nowrap"
+          >
+            <span>Manage All Leads</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {leadSummary.recentLeads.length === 0 ? (
+          <div className="p-8 text-center text-sm text-[#64748B]">
+            No leads recorded yet in your active pipeline.
+          </div>
+        ) : (
+          <>
+            {/* Mobile Stacked List */}
+            <div className="md:hidden divide-y divide-[#E2E8F0]">
+              {leadSummary.recentLeads.map((lead) => {
+                const meta = LEAD_STATUS_META[lead.status];
+                return (
+                  <div key={lead.id} className="p-4 space-y-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono-tabular text-[11px] font-semibold text-[#64748B] whitespace-nowrap">
+                            {lead.leadCode}
+                          </span>
+                          <span className="text-sm font-semibold text-[#0F172A] truncate">
+                            {lead.name}
+                          </span>
+                        </div>
+                        <div className="text-xs font-mono-tabular text-[#475569] mt-0.5">
+                          {lead.phone}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onOpenLead ? onOpenLead(lead.id) : onNavigate('leads')
+                        }
+                        className="text-xs font-semibold text-[#059669] hover:underline cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        Open Log
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#64748B]">
+                      <span className={`font-semibold ${meta.textClass}`}>
+                        {meta.label}
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span>{LEAD_SOURCE_LABELS[lead.source]}</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="font-mono-tabular">
+                        Follow-up: {formatLeadDisplayDate(lead.followUpDate)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Desktop & Tablet Crisp Table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-xs font-semibold text-[#64748B]">
+                    <th className="py-2.5 px-5 whitespace-nowrap">Lead ID</th>
+                    <th className="py-2.5 px-4 whitespace-nowrap">Contact</th>
+                    <th className="py-2.5 px-4 whitespace-nowrap">Status</th>
+                    <th className="py-2.5 px-4 whitespace-nowrap">Source</th>
+                    <th className="py-2.5 px-4 whitespace-nowrap">Follow-up</th>
+                    <th className="py-2.5 px-4 whitespace-nowrap">Lead Owner</th>
+                    <th className="py-2.5 px-5 text-right whitespace-nowrap">
+                      Action
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E2E8F0]">
+                  {leadSummary.recentLeads.map((lead) => {
+                    const meta = LEAD_STATUS_META[lead.status];
+                    return (
+                      <tr
+                        key={lead.id}
+                        className="hover:bg-[#F8FAFC] transition-colors"
+                      >
+                        <td className="py-3 px-5 font-mono-tabular text-xs font-semibold text-[#334155] whitespace-nowrap">
+                          {lead.leadCode}
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <div className="font-semibold text-[#0F172A] max-w-[200px] truncate">
+                            {lead.name}
+                          </div>
+                          <div className="text-xs font-mono-tabular text-[#64748B]">
+                            {lead.phone}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <span className={`text-xs font-semibold ${meta.textClass}`}>
+                            {meta.label}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-xs text-[#475569] whitespace-nowrap">
+                          {LEAD_SOURCE_LABELS[lead.source]}
+                        </td>
+                        <td className="py-3 px-4 text-xs font-mono-tabular text-[#475569] whitespace-nowrap">
+                          {formatLeadDisplayDate(lead.followUpDate)}
+                        </td>
+                        <td className="py-3 px-4 text-xs text-[#475569] whitespace-nowrap">
+                          <span className="inline-block max-w-[160px] truncate align-bottom">
+                            {lead.ownerName}
+                          </span>
+                        </td>
+                        <td className="py-3 px-5 text-right whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onOpenLead ? onOpenLead(lead.id) : onNavigate('leads')
+                            }
+                            className="text-xs font-semibold text-[#059669] hover:text-[#047857] hover:underline cursor-pointer"
+                          >
+                            Open Log
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </section>
+
+      {/* Section 3: Product & Pricing Catalog Summary */}
+      <section className="bg-white border border-[#E2E8F0] rounded-xl overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-[#E2E8F0] flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-[#0F172A]">
+            Product &amp; Pricing Catalog Summary
           </h2>
           <button
             type="button"
             onClick={() => onNavigate('plans')}
             className="inline-flex items-center gap-1 text-xs font-semibold text-[#059669] hover:text-[#047857] hover:underline cursor-pointer whitespace-nowrap"
           >
-            <span>Manage All Plans</span>
+            <span>
+              {user.role === 'super_admin' ? 'Manage All Plans' : 'View All Plans'}
+            </span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        {data.recentlyUpdatedPlans.length === 0 ? (
-          <div className="p-8 text-center text-sm text-[#64748B]">
-            No hosting plans in the database yet. Upload an Excel sheet or add a plan in Manage Plans.
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-px bg-[#E2E8F0]">
+          <div className="bg-white px-5 py-4">
+            <div className="text-xs font-medium text-[#64748B]">Hosting Plans</div>
+            <div className="mt-2 flex items-baseline gap-6">
+              <div>
+                <div className="font-mono-tabular text-2xl font-bold leading-none text-[#059669]">
+                  {catalogSummary.activePlans}
+                </div>
+                <div className="text-[11px] text-[#64748B] mt-1.5">Active</div>
+              </div>
+              <div>
+                <div className="font-mono-tabular text-2xl font-bold leading-none text-[#DC2626]">
+                  {inactivePlans}
+                </div>
+                <div className="text-[11px] text-[#64748B] mt-1.5">Inactive</div>
+              </div>
+            </div>
           </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-xs font-semibold text-[#64748B]">
-                  <th className="py-3 px-5">Plan Name</th>
-                  <th className="py-3 px-4">Series</th>
-                  <th className="py-3 px-4">Category</th>
-                  <th className="py-3 px-4 text-right">Monthly</th>
-                  <th className="py-3 px-4 text-right">Annually</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Updated</th>
-                  <th className="py-3 px-5 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#E2E8F0] text-sm">
-                {data.recentlyUpdatedPlans.map((plan) => {
-                  const m = plan.pricing.find((p) => p.billingCycle === 'monthly');
-                  const a = plan.pricing.find((p) => p.billingCycle === 'annually');
+
+          <div className="bg-white px-5 py-4">
+            <div className="text-xs font-medium text-[#64748B]">
+              Categories &amp; Tenures
+            </div>
+            <div className="mt-2 flex items-baseline gap-6">
+              <div>
+                <div className="font-mono-tabular text-2xl font-bold leading-none text-[#2563EB]">
+                  {catalogSummary.categoriesCount}
+                </div>
+                <div className="text-[11px] text-[#64748B] mt-1.5">Categories</div>
+              </div>
+              <div>
+                <div className="font-mono-tabular text-2xl font-bold leading-none text-[#0F172A]">
+                  6
+                </div>
+                <div className="text-[11px] text-[#64748B] mt-1.5">Cycles</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white px-5 py-4">
+            <div className="text-xs font-medium text-[#64748B]">Last Import</div>
+            <div className="mt-2 flex items-baseline gap-6">
+              <div>
+                <div className="font-mono-tabular text-2xl font-bold leading-none text-[#2563EB]">
+                  {lastUpload ? lastUpload.newPlansImported : 0}
+                </div>
+                <div className="text-[11px] text-[#64748B] mt-1.5">Added</div>
+              </div>
+              <div>
+                <div className="font-mono-tabular text-2xl font-bold leading-none text-[#059669]">
+                  {lastUpload ? lastUpload.existingPlansUpdated : 0}
+                </div>
+                <div className="text-[11px] text-[#64748B] mt-1.5">Updated</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white px-5 py-4">
+            <div className="text-xs font-medium text-[#64748B]">
+              Tax &amp; Currency
+            </div>
+            <div className="mt-2 flex items-baseline gap-6">
+              <div>
+                <div className="font-mono-tabular text-2xl font-bold leading-none text-[#0F172A]">
+                  {settings.defaultTaxRate}%
+                </div>
+                <div className="text-[11px] text-[#64748B] mt-1.5">GST</div>
+              </div>
+              <div>
+                <div className="font-mono-tabular text-2xl font-bold leading-none text-[#059669]">
+                  {settings.currencyCode}
+                </div>
+                <div className="text-[11px] text-[#64748B] mt-1.5">
+                  {settings.currencySymbol}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Recently Updated Plans + Price Changes Split */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-stretch">
+        <section className="xl:col-span-8 bg-white border border-[#E2E8F0] rounded-xl overflow-hidden flex flex-col">
+          <div className="px-5 py-3.5 border-b border-[#E2E8F0] flex items-center justify-between gap-4">
+            <h2 className="text-sm font-semibold text-[#0F172A]">
+              Recently Updated Plans
+            </h2>
+            <span className="text-xs text-[#64748B] font-mono-tabular">
+              {catalogSummary.totalPlans} total
+            </span>
+          </div>
+
+          {catalogSummary.recentPlans.length === 0 ? (
+            <div className="p-8 text-center text-sm text-[#64748B]">
+              No hosting plans in the database yet. Upload an Excel workbook to populate plans.
+            </div>
+          ) : (
+            <>
+              {/* Mobile Stacked Plan Rows */}
+              <div className="md:hidden divide-y divide-[#E2E8F0]">
+                {catalogSummary.recentPlans.map((plan) => {
+                  const m = plan.pricing.find(
+                    (p) => p.billingCycle === 'monthly'
+                  );
+                  const a = plan.pricing.find(
+                    (p) => p.billingCycle === 'annually'
+                  );
                   const mVal =
-                    m?.currentPrice ?? m?.discountedPrice ?? m?.totalPrice ?? null;
+                    m?.currentPrice ??
+                    m?.discountedPrice ??
+                    m?.totalPrice ??
+                    null;
                   const aVal =
-                    a?.currentPrice ?? a?.discountedPrice ?? a?.totalPrice ?? null;
+                    a?.currentPrice ??
+                    a?.discountedPrice ??
+                    a?.totalPrice ??
+                    null;
                   return (
-                    <tr key={plan.id} className="hover:bg-[#F8FAFC] transition-colors">
-                      <td className="py-3 px-5 font-semibold text-[#0F172A]">
-                        {plan.name}
-                      </td>
-                      <td className="py-3 px-4 text-xs text-[#64748B]">
-                        {plan.series || '—'}
-                      </td>
-                      <td className="py-3 px-4 text-[#475569]">{plan.categoryName}</td>
-                      <td className="py-3 px-4 text-right font-mono-tabular text-[#0F172A]">
-                        {mVal !== null && mVal > 0
-                          ? formatCurrencyValue(
-                              mVal,
-                              settings.currencySymbol,
-                              settings.currencyCode
-                            )
-                          : '—'}
-                      </td>
-                      <td className="py-3 px-4 text-right font-mono-tabular text-[#0F172A]">
-                        {aVal !== null && aVal > 0
-                          ? formatCurrencyValue(
-                              aVal,
-                              settings.currencySymbol,
-                              settings.currencyCode
-                            )
-                          : '—'}
-                      </td>
-                      <td className="py-3 px-4">
+                    <div key={plan.id} className="p-4 space-y-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-sm text-[#0F172A] truncate">
+                            {plan.name}
+                          </div>
+                          <div className="text-xs text-[#64748B]">
+                            {plan.categoryName}
+                            {plan.series ? ` · ${plan.series}` : ''}
+                          </div>
+                        </div>
                         <span
-                          className={`text-xs font-semibold ${
+                          className={`text-xs font-semibold shrink-0 ${
                             plan.isActive ? 'text-[#059669]' : 'text-[#DC2626]'
                           }`}
                         >
                           {plan.isActive ? 'Active' : 'Inactive'}
                         </span>
-                      </td>
-                      <td className="py-3 px-4 text-xs text-[#64748B] font-mono-tabular whitespace-nowrap">
-                        {new Date(plan.updatedAt).toLocaleDateString('en-IN', {
-                          day: '2-digit',
-                          month: 'short',
-                          year: 'numeric',
-                        })}
-                      </td>
-                      <td className="py-3 px-5 text-right space-x-3 whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => onViewPlan(plan)}
-                          className="text-xs font-semibold text-[#475569] hover:text-[#0F172A] cursor-pointer"
-                        >
-                          View
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onEditPlan(plan)}
-                          className="text-xs font-semibold text-[#059669] hover:text-[#047857] hover:underline cursor-pointer"
-                        >
-                          Edit
-                        </button>
-                      </td>
-                    </tr>
+                      </div>
+                      <div className="flex items-center justify-between gap-3 text-xs">
+                        <div className="font-mono-tabular text-[#334155]">
+                          <span>
+                            Mo:{' '}
+                            {mVal !== null && mVal > 0
+                              ? formatCurrencyValue(
+                                  mVal,
+                                  settings.currencySymbol,
+                                  settings.currencyCode
+                                )
+                              : '—'}
+                          </span>
+                          <span className="mx-2 text-[#CBD5E1]">|</span>
+                          <span>
+                            Yr:{' '}
+                            {aVal !== null && aVal > 0
+                              ? formatCurrencyValue(
+                                  aVal,
+                                  settings.currencySymbol,
+                                  settings.currencyCode
+                                )
+                              : '—'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => onViewPlan(plan)}
+                            className="font-semibold text-[#475569] hover:text-[#0F172A] cursor-pointer"
+                          >
+                            View
+                          </button>
+                          {user.role === 'super_admin' && (
+                            <button
+                              type="button"
+                              onClick={() => onEditPlan(plan)}
+                              className="font-semibold text-[#059669] hover:underline cursor-pointer"
+                            >
+                              Edit
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   );
                 })}
-              </tbody>
-            </table>
+              </div>
+
+              {/* Desktop & Tablet Plans Table */}
+              <div className="hidden md:block overflow-x-auto flex-1">
+                <table className="w-full text-left border-collapse text-sm">
+                  <thead>
+                    <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-xs font-semibold text-[#64748B]">
+                      <th className="py-2.5 px-5 whitespace-nowrap">Plan Name</th>
+                      <th className="py-2.5 px-4 whitespace-nowrap">Category</th>
+                      <th className="py-2.5 px-4 text-right whitespace-nowrap">
+                        Monthly
+                      </th>
+                      <th className="py-2.5 px-4 text-right whitespace-nowrap">
+                        Annually
+                      </th>
+                      <th className="py-2.5 px-4 whitespace-nowrap">Status</th>
+                      <th className="py-2.5 px-5 text-right whitespace-nowrap">
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#E2E8F0]">
+                    {catalogSummary.recentPlans.map((plan) => {
+                      const m = plan.pricing.find(
+                        (p) => p.billingCycle === 'monthly'
+                      );
+                      const a = plan.pricing.find(
+                        (p) => p.billingCycle === 'annually'
+                      );
+                      const mVal =
+                        m?.currentPrice ??
+                        m?.discountedPrice ??
+                        m?.totalPrice ??
+                        null;
+                      const aVal =
+                        a?.currentPrice ??
+                        a?.discountedPrice ??
+                        a?.totalPrice ??
+                        null;
+                      return (
+                        <tr
+                          key={plan.id}
+                          className="hover:bg-[#F8FAFC] transition-colors"
+                        >
+                          <td className="py-3 px-5">
+                            <div className="font-semibold text-[#0F172A]">
+                              {plan.name}
+                            </div>
+                            {plan.series && (
+                              <div className="text-xs text-[#64748B]">
+                                {plan.series}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-xs text-[#475569] whitespace-nowrap">
+                            {plan.categoryName}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono-tabular text-[#0F172A] whitespace-nowrap">
+                            {mVal !== null && mVal > 0
+                              ? formatCurrencyValue(
+                                  mVal,
+                                  settings.currencySymbol,
+                                  settings.currencyCode
+                                )
+                              : '—'}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono-tabular text-[#0F172A] whitespace-nowrap">
+                            {aVal !== null && aVal > 0
+                              ? formatCurrencyValue(
+                                  aVal,
+                                  settings.currencySymbol,
+                                  settings.currencyCode
+                                )
+                              : '—'}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <span
+                              className={`text-xs font-semibold ${
+                                plan.isActive
+                                  ? 'text-[#059669]'
+                                  : 'text-[#DC2626]'
+                              }`}
+                            >
+                              {plan.isActive ? 'Active' : 'Inactive'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-5 text-right space-x-3 whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => onViewPlan(plan)}
+                              className="text-xs font-semibold text-[#475569] hover:text-[#0F172A] cursor-pointer"
+                            >
+                              View
+                            </button>
+                            {user.role === 'super_admin' && (
+                              <button
+                                type="button"
+                                onClick={() => onEditPlan(plan)}
+                                className="text-xs font-semibold text-[#059669] hover:text-[#047857] hover:underline cursor-pointer"
+                              >
+                                Edit
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </section>
+
+        <section className="xl:col-span-4 bg-white border border-[#E2E8F0] rounded-xl overflow-hidden flex flex-col">
+          <div className="px-5 py-3.5 border-b border-[#E2E8F0] flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold text-[#0F172A]">
+              Recent Price Changes
+            </h2>
+            <button
+              type="button"
+              onClick={() => onNavigate('history')}
+              className="text-xs font-semibold text-[#059669] hover:underline cursor-pointer whitespace-nowrap"
+            >
+              View All
+            </button>
           </div>
-        )}
-      </section>
+
+          {catalogSummary.recentPriceChanges.length === 0 ? (
+            <div className="p-6 text-center text-xs text-[#64748B]">
+              No recent price adjustments logged.
+            </div>
+          ) : (
+            <div className="divide-y divide-[#E2E8F0] flex-1">
+              {catalogSummary.recentPriceChanges.map((item) => (
+                <div key={item.id} className="px-5 py-3 text-xs space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-[#0F172A] truncate">
+                      {item.planName}
+                    </span>
+                    <span className="capitalize text-[#64748B] shrink-0">
+                      {item.billingCycle}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 font-mono-tabular">
+                    <span className="text-[#64748B]">
+                      {item.previousPrice !== null
+                        ? formatCurrencyValue(
+                            item.previousPrice,
+                            settings.currencySymbol,
+                            settings.currencyCode
+                          )
+                        : 'New'}{' '}
+                      →{' '}
+                      <span className="font-semibold text-[#059669]">
+                        {item.newPrice !== null
+                          ? formatCurrencyValue(
+                              item.newPrice,
+                              settings.currencySymbol,
+                              settings.currencyCode
+                            )
+                          : 'Removed'}
+                      </span>
+                    </span>
+                    <span className="text-[#64748B] whitespace-nowrap">
+                      {new Date(item.changedAt).toLocaleDateString('en-IN', {
+                        day: '2-digit',
+                        month: 'short',
+                      })}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   );
 }

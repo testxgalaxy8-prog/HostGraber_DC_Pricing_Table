@@ -1,7 +1,10 @@
 import { useState } from 'react';
-import { Save } from 'lucide-react';
+import { Image as ImageIcon, Save, SlidersHorizontal } from 'lucide-react';
 import { apiFetch } from '../../lib/api.ts';
+import { LogoManagementView } from './LogoManagementView.tsx';
 import type { BillingCycle, PortalSettings, UserRole } from '../../shared/types.ts';
+
+type SettingsSectionTab = 'general' | 'logo';
 
 export function SettingsView({
   settings,
@@ -15,6 +18,7 @@ export function SettingsView({
   onToast: (type: 'success' | 'error', text: string) => void;
 }) {
   const isSuperAdmin = userRole === 'super_admin';
+  const [sectionTab, setSectionTab] = useState<SettingsSectionTab>('general');
 
   const [companyName, setCompanyName] = useState(settings.companyName);
   const [companyWebsite, setCompanyWebsite] = useState(settings.companyWebsite);
@@ -71,158 +75,200 @@ export function SettingsView({
   };
 
   return (
-    <div className="space-y-5 max-w-3xl">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight text-[#0F172A]">
-          Settings
-        </h1>
+    <div className="space-y-5 max-w-5xl">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight text-[#0F172A]">
+            General Settings
+          </h1>
+          <p className="text-xs text-[#64748B] mt-0.5">
+            Company defaults, currency, tax &amp; portal logo branding
+          </p>
+        </div>
+
+        <div className="flex items-center gap-1 p-1 bg-white border border-[#E2E8F0] rounded-lg">
+          <button
+            type="button"
+            onClick={() => setSectionTab('general')}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+              sectionTab === 'general'
+                ? 'bg-[#17C964] text-[#04120A] font-semibold'
+                : 'text-[#475569] hover:text-[#0F172A]'
+            }`}
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+            <span>Workspace &amp; Tax</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setSectionTab('logo')}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+              sectionTab === 'logo'
+                ? 'bg-[#17C964] text-[#04120A] font-semibold'
+                : 'text-[#475569] hover:text-[#0F172A]'
+            }`}
+          >
+            <ImageIcon className="w-3.5 h-3.5" />
+            <span>Logo Management</span>
+          </button>
+        </div>
       </div>
 
       {!isSuperAdmin && (
-        <div className="p-4 rounded-lg bg-white border border-[#E2E8F0] text-xs text-[#64748B]">
-          Settings are read-only for Admins. Only a Super Admin can modify global pricing and tax defaults.
+        <div className="p-3.5 rounded-lg bg-white border border-[#E2E8F0] text-xs text-[#64748B]">
+          Read-only view · Super Admin access required to update settings or logos.
         </div>
       )}
 
-      <form
-        onSubmit={handleSave}
-        className="bg-white border border-[#E2E8F0] rounded-lg p-6 space-y-5"
-      >
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-medium text-[#334155] mb-1">
-              Company Name
-            </label>
-            <input
-              type="text"
-              disabled={!isSuperAdmin}
-              value={companyName}
-              onChange={(e) => setCompanyName(e.target.value)}
-              className="w-full px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] disabled:opacity-60 focus:outline-none focus:bg-white focus:border-[#17C964]"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-[#334155] mb-1">
-              Company Website
-            </label>
-            <input
-              type="url"
-              disabled={!isSuperAdmin}
-              value={companyWebsite}
-              onChange={(e) => setCompanyWebsite(e.target.value)}
-              className="w-full px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] disabled:opacity-60 focus:outline-none focus:bg-white focus:border-[#17C964]"
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-xs font-medium text-[#334155] mb-1">
-              Default Currency Code
-            </label>
-            <input
-              type="text"
-              disabled={!isSuperAdmin}
-              value={currencyCode}
-              onChange={(e) => setCurrencyCode(e.target.value)}
-              className="w-full px-3 py-2 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] disabled:opacity-60 focus:outline-none focus:bg-white focus:border-[#17C964]"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-[#334155] mb-1">
-              Currency Symbol
-            </label>
-            <input
-              type="text"
-              disabled={!isSuperAdmin}
-              value={currencySymbol}
-              onChange={(e) => setCurrencySymbol(e.target.value)}
-              className="w-full px-3 py-2 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] disabled:opacity-60 focus:outline-none focus:bg-white focus:border-[#17C964]"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-[#334155] mb-1">
-              Default Tax Rate (%)
-            </label>
-            <input
-              type="number"
-              step="0.1"
-              min="0"
-              max="100"
-              disabled={!isSuperAdmin}
-              value={defaultTaxRate}
-              onChange={(e) => setDefaultTaxRate(e.target.value)}
-              className="w-full px-3 py-2 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] disabled:opacity-60 focus:outline-none focus:bg-white focus:border-[#17C964]"
-            />
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium text-[#334155] mb-1">
-            Default Tax Display in Quotations
-          </label>
-          <select
-            disabled={!isSuperAdmin}
-            value={defaultTaxDisplay}
-            onChange={(e) =>
-              setDefaultTaxDisplay(
-                e.target.value as 'before_tax' | 'inclusive_of_tax'
-              )
-            }
-            className="w-full sm:w-80 px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] disabled:opacity-60 focus:outline-none focus:bg-white focus:border-[#17C964]"
-          >
-            <option value="before_tax">Before Tax (e.g. &ldquo;before tax&rdquo;)</option>
-            <option value="inclusive_of_tax">
-              Inclusive of Tax (e.g. &ldquo;inclusive of tax&rdquo;)
-            </option>
-          </select>
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-[#334155] mb-2">
-            Default Billing Durations
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {(
-              [
-                { key: 'monthly', label: 'Monthly (1 mo)' },
-                { key: 'quarterly', label: 'Quarterly (3 mo)' },
-                { key: 'semiannually', label: 'Semi-Annually (6 mo)' },
-                { key: 'annually', label: 'Annually (12 mo)' },
-                { key: 'biennially', label: 'Biennially (24 mo)' },
-                { key: 'triennially', label: 'Triennially (36 mo)' },
-              ] as Array<{ key: BillingCycle; label: string }>
-            ).map((opt) => (
-              <label
-                key={opt.key}
-                className="inline-flex items-center gap-2 text-sm text-[#334155] cursor-pointer"
-              >
-                <input
-                  type="checkbox"
-                  disabled={!isSuperAdmin}
-                  checked={billingDurations.includes(opt.key)}
-                  onChange={() => toggleDuration(opt.key)}
-                  className="w-4 h-4 rounded border-[#CBD5E1] accent-[#17C964]"
-                />
-                <span>{opt.label}</span>
+      {sectionTab === 'general' ? (
+        <form
+          onSubmit={handleSave}
+          className="bg-white border border-[#E2E8F0] rounded-xl p-6 space-y-5 max-w-3xl"
+        >
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-[#334155] mb-1">
+                Company Name
               </label>
-            ))}
+              <input
+                type="text"
+                disabled={!isSuperAdmin}
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] disabled:opacity-60 focus:outline-none focus:bg-white focus:border-[#17C964]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-[#334155] mb-1">
+                Company Website
+              </label>
+              <input
+                type="url"
+                disabled={!isSuperAdmin}
+                value={companyWebsite}
+                onChange={(e) => setCompanyWebsite(e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] disabled:opacity-60 focus:outline-none focus:bg-white focus:border-[#17C964]"
+              />
+            </div>
           </div>
-        </div>
 
-        {isSuperAdmin && (
-          <div className="pt-4 border-t border-[#E2E8F0] flex justify-end">
-            <button
-              type="submit"
-              disabled={saving}
-              className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] disabled:opacity-60 rounded-lg cursor-pointer"
-            >
-              <Save className="w-4 h-4" />
-              <span>{saving ? 'Saving...' : 'Save Settings'}</span>
-            </button>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-[#334155] mb-1">
+                Default Currency Code
+              </label>
+              <input
+                type="text"
+                disabled={!isSuperAdmin}
+                value={currencyCode}
+                onChange={(e) => setCurrencyCode(e.target.value)}
+                className="w-full px-3 py-2 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] disabled:opacity-60 focus:outline-none focus:bg-white focus:border-[#17C964]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-[#334155] mb-1">
+                Currency Symbol
+              </label>
+              <input
+                type="text"
+                disabled={!isSuperAdmin}
+                value={currencySymbol}
+                onChange={(e) => setCurrencySymbol(e.target.value)}
+                className="w-full px-3 py-2 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] disabled:opacity-60 focus:outline-none focus:bg-white focus:border-[#17C964]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-[#334155] mb-1">
+                Default Tax Rate (%)
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                max="100"
+                disabled={!isSuperAdmin}
+                value={defaultTaxRate}
+                onChange={(e) => setDefaultTaxRate(e.target.value)}
+                className="w-full px-3 py-2 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] disabled:opacity-60 focus:outline-none focus:bg-white focus:border-[#17C964]"
+              />
+            </div>
           </div>
-        )}
-      </form>
+
+          <div>
+            <label className="block text-xs font-medium text-[#334155] mb-1">
+              Default Tax Display in Quotations
+            </label>
+            <select
+              disabled={!isSuperAdmin}
+              value={defaultTaxDisplay}
+              onChange={(e) =>
+                setDefaultTaxDisplay(
+                  e.target.value as 'before_tax' | 'inclusive_of_tax'
+                )
+              }
+              className="w-full sm:w-80 px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] disabled:opacity-60 focus:outline-none focus:bg-white focus:border-[#17C964]"
+            >
+              <option value="before_tax">Before Tax (e.g. &ldquo;before tax&rdquo;)</option>
+              <option value="inclusive_of_tax">
+                Inclusive of Tax (e.g. &ldquo;inclusive of tax&rdquo;)
+              </option>
+            </select>
+          </div>
+
+          <div>
+            <div className="text-xs font-medium text-[#334155] mb-2">
+              Default Billing Durations
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {(
+                [
+                  { key: 'monthly', label: 'Monthly (1 mo)' },
+                  { key: 'quarterly', label: 'Quarterly (3 mo)' },
+                  { key: 'semiannually', label: 'Semi-Annually (6 mo)' },
+                  { key: 'annually', label: 'Annually (12 mo)' },
+                  { key: 'biennially', label: 'Biennially (24 mo)' },
+                  { key: 'triennially', label: 'Triennially (36 mo)' },
+                ] as Array<{ key: BillingCycle; label: string }>
+              ).map((opt) => (
+                <label
+                  key={opt.key}
+                  className="inline-flex items-center gap-2 text-sm text-[#334155] cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    disabled={!isSuperAdmin}
+                    checked={billingDurations.includes(opt.key)}
+                    onChange={() => toggleDuration(opt.key)}
+                    className="w-4 h-4 rounded border-[#CBD5E1] accent-[#17C964]"
+                  />
+                  <span>{opt.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {isSuperAdmin && (
+            <div className="pt-4 border-t border-[#E2E8F0] flex justify-end">
+              <button
+                type="submit"
+                disabled={saving}
+                className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] disabled:opacity-60 rounded-lg cursor-pointer whitespace-nowrap"
+              >
+                <Save className="w-4 h-4" />
+                <span>{saving ? 'Saving...' : 'Save Settings'}</span>
+              </button>
+            </div>
+          )}
+        </form>
+      ) : (
+        <LogoManagementView
+          settings={settings}
+          embedded={true}
+          readOnly={!isSuperAdmin}
+          onSaved={onSaved}
+          onToast={onToast}
+        />
+      )}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import {
   LEAD_FORM_SOURCES,
   LEAD_SOURCE_LABELS,
   LEAD_STATUS_META,
+  LEAD_TYPE_LABELS,
   addDaysIso,
   getTodayIsoDate,
 } from '../../shared/leads.ts';
@@ -13,13 +14,18 @@ import type {
   LeadItem,
   LeadSource,
   LeadStatus,
+  LeadType,
 } from '../../shared/types.ts';
 import { CallReminderPicker } from './CallReminderPicker.tsx';
 
 export interface LeadFormSubmitPayload {
+  leadCode?: string | null;
   ownerUserId?: number | null;
   name: string;
   phone: string;
+  email?: string | null;
+  leadType: LeadType;
+  dealValue?: number | null;
   source: LeadSource;
   campaignName: string | null;
   status: LeadStatus;
@@ -27,38 +33,48 @@ export interface LeadFormSubmitPayload {
   leadDate: string;
   followUpDate: string | null;
   followUpTime: string | null;
+  watcherUserIds: number[];
 }
 
 export function LeadFormModal({
   isOpen,
   editingLead,
+  isSuperAdmin = false,
   saving,
   currentUserId,
   currentUserName,
   defaultOwnerUserId,
   unlockedColleagues,
+  allColleagues = [],
   onClose,
   onSubmit,
 }: {
   isOpen: boolean;
   editingLead: LeadItem | null;
+  isSuperAdmin?: boolean;
   saving: boolean;
   currentUserId: number;
   currentUserName: string;
   defaultOwnerUserId: number;
   unlockedColleagues: LeadColleagueOption[];
+  allColleagues?: LeadColleagueOption[];
   onClose: () => void;
   onSubmit: (payload: LeadFormSubmitPayload) => Promise<void>;
 }) {
   const [ownerUserId, setOwnerUserId] = useState<number>(defaultOwnerUserId);
+  const [leadCode, setLeadCode] = useState('');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
-  const [source, setSource] = useState<LeadSource>('whatsapp');
+  const [email, setEmail] = useState('');
+  const [leadType, setLeadType] = useState<LeadType>('retail');
+  const [dealValue, setDealValue] = useState('');
+  const [source, setSource] = useState<LeadSource>('aisensy_organic');
   const [campaignName, setCampaignName] = useState('');
-  const [status, setStatus] = useState<LeadStatus>('call_needed');
+  const [status, setStatus] = useState<LeadStatus>('new_lead');
   const [leadDate, setLeadDate] = useState(getTodayIsoDate());
   const [followUpDate, setFollowUpDate] = useState('');
   const [followUpTime, setFollowUpTime] = useState('');
+  const [watcherUserIds, setWatcherUserIds] = useState<number[]>([]);
   const [latestRemark, setLatestRemark] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -67,25 +83,39 @@ export function LeadFormModal({
     setError(null);
     if (editingLead) {
       setOwnerUserId(editingLead.ownerUserId || currentUserId);
+      setLeadCode(editingLead.leadCode || '');
       setName(editingLead.name);
       setPhone(editingLead.phone);
+      setEmail(editingLead.email || '');
+      setLeadType(editingLead.leadType || 'retail');
+      setDealValue(
+        editingLead.dealValue !== null && editingLead.dealValue !== undefined
+          ? String(editingLead.dealValue)
+          : ''
+      );
       setSource(editingLead.source);
       setCampaignName(editingLead.campaignName || '');
       setStatus(editingLead.status);
       setLeadDate(editingLead.leadDate || getTodayIsoDate());
       setFollowUpDate(editingLead.followUpDate || '');
       setFollowUpTime(editingLead.followUpTime || '');
+      setWatcherUserIds(editingLead.watcherUserIds || []);
       setLatestRemark(editingLead.latestRemark || '');
     } else {
       setOwnerUserId(defaultOwnerUserId || currentUserId);
+      setLeadCode('');
       setName('');
       setPhone('');
-      setSource('whatsapp');
+      setEmail('');
+      setLeadType('retail');
+      setDealValue('');
+      setSource('aisensy_organic');
       setCampaignName('');
-      setStatus('call_needed');
+      setStatus('new_lead');
       setLeadDate(getTodayIsoDate());
       setFollowUpDate(getTodayIsoDate());
       setFollowUpTime('');
+      setWatcherUserIds([]);
       setLatestRemark('');
     }
   }, [isOpen, editingLead, currentUserId, defaultOwnerUserId]);
@@ -101,7 +131,7 @@ export function LeadFormModal({
 
   if (!isOpen) return null;
 
-  const statusMeta = LEAD_STATUS_META[status];
+  const statusMeta = LEAD_STATUS_META[status] || LEAD_STATUS_META.new_lead;
 
   const handleFollowUpDateChange = (nextDate: string) => {
     setFollowUpDate(nextDate);
@@ -110,18 +140,31 @@ export function LeadFormModal({
     }
   };
 
+  const toggleWatcher = (userId: number) => {
+    setWatcherUserIds((prev) =>
+      prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
+    );
+  };
+
+  const watcherCandidates = allColleagues.length > 0 ? allColleagues : unlockedColleagues;
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
     if (!name.trim()) {
-      setError('Client name is required.');
+      setError('Contact name is required.');
       return;
     }
     const digits = phone.replace(/\D/g, '');
     if (digits.length < 7 || digits.length > 15) {
-      setError('Enter a valid client mobile number (10-digit or +country code).');
+      setError('Enter a valid contact number (10-digit or +country code).');
       return;
     }
+
+    const parsedDeal =
+      dealValue.trim() !== '' && Number.isFinite(Number(dealValue.trim()))
+        ? Math.max(0, Number(dealValue.trim()))
+        : null;
 
     const cleanFollowUpDate = followUpDate.trim() || null;
     const cleanFollowUpTime =
@@ -129,9 +172,16 @@ export function LeadFormModal({
 
     try {
       await onSubmit({
+        leadCode:
+          editingLead && isSuperAdmin && leadCode.trim()
+            ? leadCode.trim().toUpperCase()
+            : null,
         ownerUserId: editingLead ? editingLead.ownerUserId : ownerUserId,
         name: name.trim(),
         phone: phone.trim(),
+        email: email.trim() || null,
+        leadType,
+        dealValue: parsedDeal,
         source,
         campaignName: campaignName.trim() || null,
         status,
@@ -139,6 +189,7 @@ export function LeadFormModal({
         leadDate: leadDate || getTodayIsoDate(),
         followUpDate: cleanFollowUpDate,
         followUpTime: cleanFollowUpTime,
+        watcherUserIds,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to save lead.');
@@ -166,10 +217,14 @@ export function LeadFormModal({
                 id="lead-form-modal-title"
                 className="text-base font-semibold text-[#0F172A]"
               >
-                {editingLead ? `Edit Lead · ${editingLead.name}` : 'Add New Lead'}
+                {editingLead
+                  ? `Edit Lead · ${editingLead.leadCode} · ${editingLead.name}`
+                  : 'Add New Lead'}
               </h3>
               <p className="text-xs text-[#64748B]">
-                Record client contact, follow-up schedule, callback timer, and status
+                {editingLead
+                  ? 'Update contact details, status, watchers, and follow-up schedule'
+                  : 'Contact details, status, watchers, and follow-up schedule'}
               </p>
             </div>
           </div>
@@ -191,30 +246,79 @@ export function LeadFormModal({
             </div>
           )}
 
-          {!editingLead && unlockedColleagues.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {editingLead && isSuperAdmin && (
+              <div>
+                <label className="block text-xs font-semibold text-[#334155] mb-1.5">
+                  Lead ID
+                </label>
+                <input
+                  type="text"
+                  value={leadCode}
+                  onChange={(e) => setLeadCode(e.target.value)}
+                  placeholder="HG-0001"
+                  className="w-full h-10 px-3 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
+                />
+              </div>
+            )}
+
             <div>
-              <label className="block text-xs font-semibold text-[#334155] mb-1">
-                Assign Lead Owner
+              <label className="block text-xs font-semibold text-[#334155] mb-1.5">
+                Lead Type
               </label>
               <select
-                value={ownerUserId}
-                onChange={(e) => setOwnerUserId(Number(e.target.value))}
-                className="w-full px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
+                value={leadType}
+                onChange={(e) => setLeadType(e.target.value as LeadType)}
+                className="w-full h-10 px-3 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] cursor-pointer focus:outline-none focus:bg-white focus:border-[#17C964]"
               >
-                <option value={currentUserId}>{currentUserName} (Me)</option>
-                {unlockedColleagues.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.displayName} (Unlocked)
+                {(Object.keys(LEAD_TYPE_LABELS) as LeadType[]).map((t) => (
+                  <option key={t} value={t}>
+                    {LEAD_TYPE_LABELS[t]}
                   </option>
                 ))}
               </select>
             </div>
-          )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {!editingLead && unlockedColleagues.length > 0 && (
+              <div>
+                <label className="block text-xs font-semibold text-[#334155] mb-1.5">
+                  Lead Owner
+                </label>
+                <select
+                  value={ownerUserId}
+                  onChange={(e) => setOwnerUserId(Number(e.target.value))}
+                  className="w-full h-10 px-3 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
+                >
+                  <option value={currentUserId}>{currentUserName} (Me)</option>
+                  {unlockedColleagues.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.displayName} (Unlocked)
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div>
               <label className="block text-xs font-semibold text-[#334155] mb-1.5">
-                Client Name *
+                Deal Value (Optional)
+              </label>
+              <input
+                type="number"
+                min={0}
+                step="any"
+                value={dealValue}
+                onChange={(e) => setDealValue(e.target.value)}
+                placeholder="e.g. 12500"
+                className="w-full h-10 px-3 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-[#334155] mb-1.5">
+                Contact Name *
               </label>
               <input
                 type="text"
@@ -228,7 +332,7 @@ export function LeadFormModal({
 
             <div>
               <label className="block text-xs font-semibold text-[#334155] mb-1.5">
-                Mobile Number *
+                Contact Number *
               </label>
               <input
                 type="tel"
@@ -237,6 +341,19 @@ export function LeadFormModal({
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="e.g. 9876543210 or +91..."
                 className="w-full h-10 px-3 text-sm font-mono-tabular bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[#334155] mb-1.5">
+                Email
+              </label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="e.g. rahul@company.com"
+                className="w-full h-10 px-3 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
               />
             </div>
           </div>
@@ -364,15 +481,57 @@ export function LeadFormModal({
             />
           </div>
 
+          {watcherCandidates.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-[#334155]">
+                  Lead Watchers (Team members with view access)
+                </label>
+                {watcherUserIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setWatcherUserIds([])}
+                    className="text-[11px] text-[#64748B] hover:text-[#0F172A] cursor-pointer"
+                  >
+                    Clear ({watcherUserIds.length})
+                  </button>
+                )}
+              </div>
+              <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] flex flex-wrap gap-2">
+                {watcherCandidates.map((colleague) => {
+                  const checked = watcherUserIds.includes(colleague.id);
+                  return (
+                    <label
+                      key={colleague.id}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-xs cursor-pointer transition-colors ${
+                        checked
+                          ? 'bg-[#ECFDF5] border-[#6EE7B7] text-[#065F46] font-semibold'
+                          : 'bg-white border-[#CBD5E1] text-[#334155] hover:border-[#94A3B8]'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleWatcher(colleague.id)}
+                        className="w-3.5 h-3.5 rounded accent-[#17C964] cursor-pointer"
+                      />
+                      <span>{colleague.displayName}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-semibold text-[#334155] mb-1">
-              Call Remark / Client Update
+              Call Remark
             </label>
             <textarea
               rows={3}
               value={latestRemark}
               onChange={(e) => setLatestRemark(e.target.value)}
-              placeholder="Write what update you received after calling the client (e.g., Needs 4GB VPS quote tomorrow evening)..."
+              placeholder="Summary of client call or requirement..."
               className="w-full px-3 py-2 text-sm bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:bg-white focus:border-[#17C964]"
             />
           </div>

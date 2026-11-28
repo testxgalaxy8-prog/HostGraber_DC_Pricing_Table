@@ -1,5 +1,18 @@
 import crypto from 'node:crypto';
-import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, or } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { db } from './index.ts';
 import {
   leadAccessGrants,
@@ -12,12 +25,15 @@ import {
 import { getOrInitSettings } from './defaults.ts';
 import { hashPassword, verifyPassword } from '../lib/password.ts';
 import {
+  CLOSED_LEAD_STATUSES,
+  formatLeadCodeFromNumber,
   getTodayIsoDate,
   normalizeFollowUpTimeInput,
   normalizeIsoDateInput,
   normalizeLeadPhone,
   normalizeLeadSource,
   normalizeLeadStatus,
+  normalizeLeadType,
 } from '../shared/leads.ts';
 import type {
   LeadAccessLogItem,
@@ -27,6 +43,7 @@ import type {
   LeadRemarkItem,
   LeadSource,
   LeadStatus,
+  LeadType,
   UserRole,
 } from '../shared/types.ts';
 
@@ -43,9 +60,12 @@ export class LeadAccessDeniedError extends Error {
 }
 
 export interface CreateOrUpdateLeadInput {
+  leadCode?: string | null;
   ownerUserId?: number | null;
   name: string;
   phone: string;
+  email?: string | null;
+  leadType?: LeadType | string | null;
   source?: LeadSource | string;
   campaignName?: string | null;
   status?: LeadStatus | string;
@@ -53,6 +73,8 @@ export interface CreateOrUpdateLeadInput {
   leadDate?: string | null;
   followUpDate?: string | null;
   followUpTime?: string | null;
+  dealValue?: number | null;
+  watcherUserIds?: number[];
   actor: string;
 }
 
@@ -65,18 +87,237 @@ export interface AddLeadRemarkInput {
   actor: string;
 }
 
+let schemaMigrationPromise: Promise<void> | null = null;
+
+const LEGACY_STATUS_MAP: Record<string, LeadStatus> = {
+  call_needed: 'new_lead',
+  positive: 'positive_lead',
+  converted: 'won',
+  existing_client: 'existing_client_lead',
+  not_required: 'cold_lead',
+  deny: 'denied',
+};
+
+const LEGACY_SOURCE_MAP: Record<string, LeadSource> = {
+  aisensy: 'aisensy_organic',
+  whatsapp: 'aisensy_organic',
+  csv_import: 'import',
+  website: 'website_whmcs',
+  manual: 'other',
+  inbound_call: 'other',
+};
+
+export async function ensureLeadsSchemaMigrated(): Promise<void> {
+  if (!schemaMigrationPromise) {
+    schemaMigrationPromise = (async () => {
+      await ensureLeadOwnersBackfilled();
+
+      // 1. Auto-map legacy statuses in leads and lead_remarks
+      for (const [legacyStatus, nextStatus] of Object.entries(LEGACY_STATUS_MAP)) {
+        await db
+          .update(leads)
+          .set({ status: nextStatus })
+          .where(eq(leads.status, legacyStatus));
+        await db
+          .update(leadRemarks)
+          .set({ statusAtCall: nextStatus })
+          .where(eq(leadRemarks.statusAtCall, legacyStatus));
+      }
+
+      // 2. Auto-map legacy sources in leads
+      for (const [legacySource, nextSource] of Object.entries(LEGACY_SOURCE_MAP)) {
+        await db
+          .update(leads)
+          .set({ source: nextSource })
+          .where(eq(leads.source, legacySource));
+      }
+
+      // 3. Backfill sequential unique Lead IDs (HG-0001, HG-0002, ...)
+      const allCodeRows = await db
+        .select({ id: leads.id, leadCode: leads.leadCode })
+        .from(leads)
+        .orderBy(asc(leads.id));
+
+      let maxNum = 0;
+      const usedCodes = new Set<string>();
+      for (const r of allCodeRows) {
+        const clean = (r.leadCode || '').trim();
+        if (clean) {
+          usedCodes.add(clean.toUpperCase());
+          const match = /^HG-(\d+)$/i.exec(clean);
+          if (match) {
+            const num = Number(match[1]);
+            if (num > maxNum) maxNum = num;
+          }
+        }
+      }
+
+      for (const r of allCodeRows) {
+        if (!r.leadCode || !r.leadCode.trim()) {
+          maxNum += 1;
+          let candidate = formatLeadCodeFromNumber(maxNum);
+          while (usedCodes.has(candidate.toUpperCase())) {
+            maxNum += 1;
+            candidate = formatLeadCodeFromNumber(maxNum);
+          }
+          usedCodes.add(candidate.toUpperCase());
+          await db
+            .update(leads)
+            .set({ leadCode: candidate })
+            .where(eq(leads.id, r.id));
+        }
+      }
+    })().catch((err) => {
+      schemaMigrationPromise = null;
+      throw err;
+    });
+  }
+  await schemaMigrationPromise;
+}
+
+function normalizeEmailInput(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed) return null;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    throw new Error('Enter a valid email address or leave email blank.');
+  }
+  return trimmed;
+}
+
+function normalizeDealValueInput(raw: number | null | undefined): number | null {
+  if (raw === undefined || raw === null || Number.isNaN(Number(raw))) return null;
+  const num = Number(raw);
+  if (num < 0) return 0;
+  return Math.round(num * 100) / 100;
+}
+
+async function normalizeWatcherIdsInput(rawIds: number[] | undefined): Promise<number[]> {
+  if (!Array.isArray(rawIds) || rawIds.length === 0) return [];
+  const clean = Array.from(
+    new Set(rawIds.filter((id) => Number.isInteger(id) && id > 0))
+  );
+  if (clean.length === 0) return [];
+  const validRows = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(inArray(users.id, clean), eq(users.isActive, true)));
+  return validRows.map((r) => r.id);
+}
+
+async function generateNextLeadCode(): Promise<string> {
+  const existingCodes = await db
+    .select({ leadCode: leads.leadCode })
+    .from(leads)
+    .where(isNotNull(leads.leadCode));
+
+  let maxNum = 0;
+  const used = new Set<string>();
+  for (const row of existingCodes) {
+    const clean = (row.leadCode || '').trim();
+    if (!clean) continue;
+    used.add(clean.toUpperCase());
+    const match = /^HG-(\d+)$/i.exec(clean);
+    if (match) {
+      const n = Number(match[1]);
+      if (n > maxNum) maxNum = n;
+    }
+  }
+
+  let nextNum = maxNum + 1;
+  let candidate = formatLeadCodeFromNumber(nextNum);
+  while (used.has(candidate.toUpperCase())) {
+    nextNum += 1;
+    candidate = formatLeadCodeFromNumber(nextNum);
+  }
+  return candidate;
+}
+
+async function resolveAndValidateLeadCode(
+  rawCode: string | null | undefined,
+  excludeLeadId?: number
+): Promise<string> {
+  const clean = (rawCode || '').trim();
+  if (!clean) {
+    return generateNextLeadCode();
+  }
+  if (!/^[A-Za-z0-9_-]{2,32}$/.test(clean)) {
+    throw new Error(
+      'Lead ID must be 2-32 characters using letters, numbers, hyphens, or underscores (e.g. HG-0001).'
+    );
+  }
+
+  const normalized = clean.toUpperCase();
+  const conflictRows = await db
+    .select({ id: leads.id, leadCode: leads.leadCode })
+    .from(leads)
+    .where(sql`UPPER(${leads.leadCode}) = ${normalized}`)
+    .limit(2);
+
+  const conflict = conflictRows.find((r) => r.id !== excludeLeadId);
+  if (conflict) {
+    throw new Error(`Lead ID "${normalized}" already exists. Use a unique Lead ID.`);
+  }
+
+  return normalized;
+}
+
+async function fetchUserNameMap(): Promise<Map<number, string>> {
+  const rows = await db
+    .select({
+      id: users.id,
+      username: users.username,
+      displayName: users.displayName,
+    })
+    .from(users);
+  const map = new Map<number, string>();
+  for (const u of rows) {
+    map.set(u.id, u.displayName || u.username);
+  }
+  return map;
+}
+
+async function fetchDuplicatePhoneMap(): Promise<Map<string, number>> {
+  const rows = await db
+    .select({
+      normalizedPhone: leads.normalizedPhone,
+      total: count(),
+    })
+    .from(leads)
+    .groupBy(leads.normalizedPhone);
+  const map = new Map<string, number>();
+  for (const row of rows) {
+    if (row.normalizedPhone) {
+      map.set(row.normalizedPhone, Number(row.total));
+    }
+  }
+  return map;
+}
+
 function mapLeadRow(
   row: typeof leads.$inferSelect,
   remarksCount: number,
+  userNameMap: Map<number, string>,
+  duplicatePhoneMap?: Map<string, number>,
   remarks?: LeadRemarkItem[]
 ): LeadItem {
+  const watcherUserIds = Array.isArray(row.watcherUserIds)
+    ? row.watcherUserIds.filter((id) => Number.isInteger(id) && id > 0)
+    : [];
+  const watcherNames = watcherUserIds
+    .map((id) => userNameMap.get(id))
+    .filter((name): name is string => Boolean(name));
+
   return {
     id: row.id,
+    leadCode: row.leadCode || formatLeadCodeFromNumber(row.id),
     ownerUserId: row.ownerUserId ?? null,
     ownerName: row.ownerName || row.createdBy || 'Team',
     name: row.name,
     phone: row.phone,
     normalizedPhone: row.normalizedPhone,
+    email: row.email ?? null,
+    leadType: normalizeLeadType(row.leadType),
     source: normalizeLeadSource(row.source),
     campaignName: row.campaignName ?? null,
     status: normalizeLeadStatus(row.status),
@@ -87,6 +328,15 @@ function mapLeadRow(
     reminderNotifiedAt: row.reminderNotifiedAt
       ? row.reminderNotifiedAt.toISOString()
       : null,
+    dealValue: row.dealValue ?? null,
+    watcherUserIds,
+    watcherNames,
+    ...(duplicatePhoneMap
+      ? {
+          duplicatePhoneCount:
+            duplicatePhoneMap.get(row.normalizedPhone) ?? 1,
+        }
+      : {}),
     createdBy: row.createdBy,
     updatedBy: row.updatedBy,
     createdAt: row.createdAt.toISOString(),
@@ -171,6 +421,24 @@ export async function hasLeadOwnerAccess(
   return unlocked.has(ownerUserId);
 }
 
+export async function hasLeadViewAccess(
+  sessionTokenHash: string,
+  viewerUserId: number,
+  leadRow: typeof leads.$inferSelect
+): Promise<boolean> {
+  if (
+    Array.isArray(leadRow.watcherUserIds) &&
+    leadRow.watcherUserIds.includes(viewerUserId)
+  ) {
+    return true;
+  }
+  return hasLeadOwnerAccess(
+    sessionTokenHash,
+    viewerUserId,
+    leadRow.ownerUserId
+  );
+}
+
 export async function recordLeadAccessLog(entry: {
   viewerUserId: number | null;
   viewerName: string;
@@ -194,11 +462,12 @@ export async function fetchLeadColleagues(
   sessionTokenHash: string
 ): Promise<{
   myLeadCount: number;
+  watchedLeadCount: number;
   colleagues: LeadColleagueOption[];
 }> {
-  await ensureLeadOwnersBackfilled();
+  await ensureLeadsSchemaMigrated();
 
-  const [allUsers, countRows, unlockedSet] = await Promise.all([
+  const [allUsers, countRows, watchedCountRows, unlockedSet] = await Promise.all([
     db.select().from(users).where(eq(users.isActive, true)),
     db
       .select({
@@ -207,6 +476,12 @@ export async function fetchLeadColleagues(
       })
       .from(leads)
       .groupBy(leads.ownerUserId),
+    db
+      .select({ total: count() })
+      .from(leads)
+      .where(
+        sql`${leads.watcherUserIds}::jsonb @> ${JSON.stringify([viewerUserId])}::jsonb`
+      ),
     getUnlockedTargetIds(sessionTokenHash, viewerUserId),
   ]);
 
@@ -218,6 +493,7 @@ export async function fetchLeadColleagues(
   }
 
   const myLeadCount = countMap.get(viewerUserId) ?? 0;
+  const watchedLeadCount = Number(watchedCountRows[0]?.total ?? 0);
 
   const colleagues: LeadColleagueOption[] = allUsers
     .filter((u) => u.id !== viewerUserId)
@@ -232,7 +508,7 @@ export async function fetchLeadColleagues(
     }))
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
 
-  return { myLeadCount, colleagues };
+  return { myLeadCount, watchedLeadCount, colleagues };
 }
 
 export async function fetchScopedLeads(options: {
@@ -240,10 +516,11 @@ export async function fetchScopedLeads(options: {
   targetUserId?: number | null;
   viewerUserId: number;
   viewerName: string;
+  isSuperAdmin?: boolean;
   sessionTokenHash: string;
   logSwitch?: boolean;
 }): Promise<LeadItem[]> {
-  await ensureLeadOwnersBackfilled();
+  await ensureLeadsSchemaMigrated();
 
   const unlockedSet = await getUnlockedTargetIds(
     options.sessionTokenHash,
@@ -257,6 +534,14 @@ export async function fetchScopedLeads(options: {
       .select()
       .from(leads)
       .where(eq(leads.ownerUserId, options.viewerUserId))
+      .orderBy(desc(leads.updatedAt), desc(leads.id));
+  } else if (options.scope === 'watched') {
+    leadRows = await db
+      .select()
+      .from(leads)
+      .where(
+        sql`${leads.watcherUserIds}::jsonb @> ${JSON.stringify([options.viewerUserId])}::jsonb`
+      )
       .orderBy(desc(leads.updatedAt), desc(leads.id));
   } else if (options.scope === 'user') {
     const targetId = options.targetUserId ?? options.viewerUserId;
@@ -303,35 +588,51 @@ export async function fetchScopedLeads(options: {
       .where(inArray(leads.ownerUserId, otherIds))
       .orderBy(desc(leads.updatedAt), desc(leads.id));
   } else {
-    // 'any': own leads + unlocked colleagues' leads
+    // 'any': own leads + unlocked colleagues' leads + leads watched by viewer
     const allowedIds = Array.from(
       new Set([options.viewerUserId, ...Array.from(unlockedSet)])
     );
     leadRows = await db
       .select()
       .from(leads)
-      .where(inArray(leads.ownerUserId, allowedIds))
+      .where(
+        or(
+          inArray(leads.ownerUserId, allowedIds),
+          sql`${leads.watcherUserIds}::jsonb @> ${JSON.stringify([options.viewerUserId])}::jsonb`
+        )
+      )
       .orderBy(desc(leads.updatedAt), desc(leads.id));
   }
 
   if (leadRows.length === 0) return [];
 
   const leadIds = leadRows.map((l) => l.id);
-  const countRows = await db
-    .select({
-      leadId: leadRemarks.leadId,
-      total: count(),
-    })
-    .from(leadRemarks)
-    .where(inArray(leadRemarks.leadId, leadIds))
-    .groupBy(leadRemarks.leadId);
+  const [countRows, userNameMap, duplicatePhoneMap] = await Promise.all([
+    db
+      .select({
+        leadId: leadRemarks.leadId,
+        total: count(),
+      })
+      .from(leadRemarks)
+      .where(inArray(leadRemarks.leadId, leadIds))
+      .groupBy(leadRemarks.leadId),
+    fetchUserNameMap(),
+    options.isSuperAdmin ? fetchDuplicatePhoneMap() : Promise.resolve(undefined),
+  ]);
 
   const countMap = new Map<number, number>();
   for (const row of countRows) {
     countMap.set(row.leadId, Number(row.total));
   }
 
-  return leadRows.map((row) => mapLeadRow(row, countMap.get(row.id) ?? 0));
+  return leadRows.map((row) =>
+    mapLeadRow(
+      row,
+      countMap.get(row.id) ?? 0,
+      userNameMap,
+      duplicatePhoneMap
+    )
+  );
 }
 
 export async function setUserLeadSecurityCode(
@@ -378,7 +679,7 @@ export async function unlockColleagueLeads(options: {
 
   if (!targetUser.leadSecurityCodeHash) {
     throw new Error(
-      `${targetName} has not set a Lead Security Code yet. Ask them to set one under "My Security Code".`
+      `${targetName} has not set a Lead Security Code yet. Ask them to set one under Profile → Security Code.`
     );
   }
 
@@ -483,16 +784,22 @@ export async function fetchLeadAccessLogs(options: {
 
 export async function fetchLeadById(
   id: number,
-  access?: { viewerUserId: number; sessionTokenHash: string }
+  access?: {
+    viewerUserId: number;
+    sessionTokenHash: string;
+    isSuperAdmin?: boolean;
+  }
 ): Promise<LeadItem | null> {
+  await ensureLeadsSchemaMigrated();
+
   const [leadRow] = await db.select().from(leads).where(eq(leads.id, id)).limit(1);
   if (!leadRow) return null;
 
   if (access) {
-    const allowed = await hasLeadOwnerAccess(
+    const allowed = await hasLeadViewAccess(
       access.sessionTokenHash,
       access.viewerUserId,
-      leadRow.ownerUserId
+      leadRow
     );
     if (!allowed) {
       throw new LeadAccessDeniedError(
@@ -502,18 +809,30 @@ export async function fetchLeadById(
     }
   }
 
-  const remarkRows = await db
-    .select()
-    .from(leadRemarks)
-    .where(eq(leadRemarks.leadId, id))
-    .orderBy(
-      desc(leadRemarks.callDate),
-      desc(leadRemarks.createdAt),
-      desc(leadRemarks.id)
-    );
+  const [remarkRows, userNameMap, duplicatePhoneMap] = await Promise.all([
+    db
+      .select()
+      .from(leadRemarks)
+      .where(eq(leadRemarks.leadId, id))
+      .orderBy(
+        desc(leadRemarks.callDate),
+        desc(leadRemarks.createdAt),
+        desc(leadRemarks.id)
+      ),
+    fetchUserNameMap(),
+    access?.isSuperAdmin
+      ? fetchDuplicatePhoneMap()
+      : Promise.resolve(undefined),
+  ]);
 
   const mappedRemarks = remarkRows.map(mapRemarkRow);
-  return mapLeadRow(leadRow, mappedRemarks.length, mappedRemarks);
+  return mapLeadRow(
+    leadRow,
+    mappedRemarks.length,
+    userNameMap,
+    duplicatePhoneMap,
+    mappedRemarks
+  );
 }
 
 async function resolveOwnerInfo(
@@ -541,16 +860,23 @@ async function resolveOwnerInfo(
 
 export async function createLeadRecord(
   input: CreateOrUpdateLeadInput,
-  access?: { viewerUserId: number; viewerName: string; sessionTokenHash: string }
+  access?: {
+    viewerUserId: number;
+    viewerName: string;
+    sessionTokenHash: string;
+    isSuperAdmin?: boolean;
+  }
 ): Promise<LeadItem> {
+  await ensureLeadsSchemaMigrated();
+
   const cleanName = input.name.trim();
   if (!cleanName) {
-    throw new Error('Client name is required.');
+    throw new Error('Contact name is required.');
   }
 
   const { displayPhone, normalizedPhone } = normalizeLeadPhone(input.phone);
   if (normalizedPhone.length < 7 || normalizedPhone.length > 15) {
-    throw new Error('Enter a valid client mobile number (7 to 15 digits).');
+    throw new Error('Enter a valid contact number (7 to 15 digits).');
   }
 
   const targetOwnerId = input.ownerUserId ?? access?.viewerUserId ?? null;
@@ -568,7 +894,14 @@ export async function createLeadRecord(
     }
   }
 
-  const ownerInfo = await resolveOwnerInfo(targetOwnerId, input.actor);
+  const [ownerInfo, leadCode, watcherUserIds] = await Promise.all([
+    resolveOwnerInfo(targetOwnerId, input.actor),
+    resolveAndValidateLeadCode(input.leadCode),
+    normalizeWatcherIdsInput(input.watcherUserIds),
+  ]);
+
+  const email = normalizeEmailInput(input.email);
+  const leadType = normalizeLeadType(input.leadType);
   const status = normalizeLeadStatus(input.status);
   const source = normalizeLeadSource(input.source);
   const leadDate = normalizeIsoDateInput(input.leadDate) ?? getTodayIsoDate();
@@ -578,16 +911,20 @@ export async function createLeadRecord(
     : null;
   const latestRemark = (input.latestRemark || '').trim();
   const campaignName = input.campaignName?.trim() || null;
+  const dealValue = normalizeDealValueInput(input.dealValue);
 
   const createdLeadId = await db.transaction(async (tx) => {
     const [inserted] = await tx
       .insert(leads)
       .values({
+        leadCode,
         ownerUserId: ownerInfo.ownerUserId,
         ownerName: ownerInfo.ownerName,
         name: cleanName,
         phone: displayPhone,
         normalizedPhone,
+        email,
+        leadType,
         source,
         campaignName,
         status,
@@ -596,6 +933,8 @@ export async function createLeadRecord(
         followUpDate,
         followUpTime,
         reminderNotifiedAt: null,
+        dealValue,
+        watcherUserIds,
         createdBy: input.actor,
         updatedBy: input.actor,
       })
@@ -627,11 +966,20 @@ export async function createLeadRecord(
       targetUserId: ownerInfo.ownerUserId,
       targetName: ownerInfo.ownerName,
       action: 'create_lead',
-      details: `Added lead "${cleanName}" under ${ownerInfo.ownerName}`,
+      details: `Added lead "${cleanName}" (${leadCode}) under ${ownerInfo.ownerName}`,
     });
   }
 
-  const full = await fetchLeadById(createdLeadId);
+  const full = await fetchLeadById(
+    createdLeadId,
+    access
+      ? {
+          viewerUserId: access.viewerUserId,
+          sessionTokenHash: access.sessionTokenHash,
+          isSuperAdmin: access.isSuperAdmin,
+        }
+      : undefined
+  );
   if (!full) throw new Error('Failed to load newly created lead.');
   return full;
 }
@@ -639,8 +987,15 @@ export async function createLeadRecord(
 export async function updateLeadRecord(
   id: number,
   input: Partial<CreateOrUpdateLeadInput> & { actor: string },
-  access?: { viewerUserId: number; viewerName: string; sessionTokenHash: string }
+  access?: {
+    viewerUserId: number;
+    viewerName: string;
+    sessionTokenHash: string;
+    isSuperAdmin?: boolean;
+  }
 ): Promise<LeadItem | null> {
+  await ensureLeadsSchemaMigrated();
+
   const [existing] = await db.select().from(leads).where(eq(leads.id, id)).limit(1);
   if (!existing) return null;
 
@@ -660,8 +1015,13 @@ export async function updateLeadRecord(
 
   const nextName = input.name !== undefined ? input.name.trim() : existing.name;
   if (!nextName) {
-    throw new Error('Client name is required.');
+    throw new Error('Contact name is required.');
   }
+
+  const nextLeadCode =
+    input.leadCode !== undefined
+      ? await resolveAndValidateLeadCode(input.leadCode, id)
+      : existing.leadCode || formatLeadCodeFromNumber(id);
 
   let nextPhone = existing.phone;
   let nextNormalized = existing.normalizedPhone;
@@ -671,12 +1031,20 @@ export async function updateLeadRecord(
       phoneInfo.normalizedPhone.length < 7 ||
       phoneInfo.normalizedPhone.length > 15
     ) {
-      throw new Error('Enter a valid client mobile number (7 to 15 digits).');
+      throw new Error('Enter a valid contact number (7 to 15 digits).');
     }
     nextPhone = phoneInfo.displayPhone;
     nextNormalized = phoneInfo.normalizedPhone;
   }
 
+  const nextEmail =
+    input.email !== undefined
+      ? normalizeEmailInput(input.email)
+      : existing.email ?? null;
+  const nextLeadType =
+    input.leadType !== undefined
+      ? normalizeLeadType(input.leadType)
+      : normalizeLeadType(existing.leadType);
   const nextSource =
     input.source !== undefined
       ? normalizeLeadSource(input.source)
@@ -707,6 +1075,16 @@ export async function updateLeadRecord(
       : input.followUpTime !== undefined
         ? normalizeFollowUpTimeInput(input.followUpTime)
         : existing.followUpTime;
+  const nextDealValue =
+    input.dealValue !== undefined
+      ? normalizeDealValueInput(input.dealValue)
+      : existing.dealValue ?? null;
+  const nextWatcherUserIds =
+    input.watcherUserIds !== undefined
+      ? await normalizeWatcherIdsInput(input.watcherUserIds)
+      : Array.isArray(existing.watcherUserIds)
+        ? existing.watcherUserIds
+        : [];
 
   const scheduleChanged =
     nextFollowUpDate !== existing.followUpDate ||
@@ -715,9 +1093,12 @@ export async function updateLeadRecord(
   await db
     .update(leads)
     .set({
+      leadCode: nextLeadCode,
       name: nextName,
       phone: nextPhone,
       normalizedPhone: nextNormalized,
+      email: nextEmail,
+      leadType: nextLeadType,
       source: nextSource,
       campaignName: nextCampaign,
       status: nextStatus,
@@ -725,6 +1106,8 @@ export async function updateLeadRecord(
       leadDate: nextLeadDate,
       followUpDate: nextFollowUpDate,
       followUpTime: nextFollowUpTime,
+      dealValue: nextDealValue,
+      watcherUserIds: nextWatcherUserIds,
       ...(scheduleChanged ? { reminderNotifiedAt: null } : {}),
       updatedBy: input.actor,
       updatedAt: new Date(),
@@ -742,18 +1125,34 @@ export async function updateLeadRecord(
       targetUserId: existing.ownerUserId,
       targetName: existing.ownerName || 'Colleague',
       action: 'update_lead',
-      details: `Updated lead "${nextName}" (Status: ${nextStatus})`,
+      details: `Updated lead "${nextName}" (${nextLeadCode}, Status: ${nextStatus})`,
     });
   }
 
-  return fetchLeadById(id);
+  return fetchLeadById(
+    id,
+    access
+      ? {
+          viewerUserId: access.viewerUserId,
+          sessionTokenHash: access.sessionTokenHash,
+          isSuperAdmin: access.isSuperAdmin,
+        }
+      : undefined
+  );
 }
 
 export async function addLeadRemarkRecord(
   leadId: number,
   input: AddLeadRemarkInput,
-  access?: { viewerUserId: number; viewerName: string; sessionTokenHash: string }
+  access?: {
+    viewerUserId: number;
+    viewerName: string;
+    sessionTokenHash: string;
+    isSuperAdmin?: boolean;
+  }
 ): Promise<LeadItem | null> {
+  await ensureLeadsSchemaMigrated();
+
   const [existing] = await db
     .select()
     .from(leads)
@@ -838,14 +1237,24 @@ export async function addLeadRemarkRecord(
     });
   }
 
-  return fetchLeadById(leadId);
+  return fetchLeadById(
+    leadId,
+    access
+      ? {
+          viewerUserId: access.viewerUserId,
+          sessionTokenHash: access.sessionTokenHash,
+          isSuperAdmin: access.isSuperAdmin,
+        }
+      : undefined
+  );
 }
 
 export async function fetchActiveLeadReminders(options: {
   viewerUserId: number;
   sessionTokenHash: string;
+  isSuperAdmin?: boolean;
 }): Promise<LeadItem[]> {
-  await ensureLeadOwnersBackfilled();
+  await ensureLeadsSchemaMigrated();
 
   const unlockedSet = await getUnlockedTargetIds(
     options.sessionTokenHash,
@@ -860,9 +1269,12 @@ export async function fetchActiveLeadReminders(options: {
     .from(leads)
     .where(
       and(
-        inArray(leads.ownerUserId, allowedOwnerIds),
+        or(
+          inArray(leads.ownerUserId, allowedOwnerIds),
+          sql`${leads.watcherUserIds}::jsonb @> ${JSON.stringify([options.viewerUserId])}::jsonb`
+        ),
         isNotNull(leads.followUpDate),
-        inArray(leads.status, ['call_needed', 'positive', 'existing_client'])
+        notInArray(leads.status, CLOSED_LEAD_STATUSES)
       )
     )
     .orderBy(asc(leads.followUpDate), asc(leads.followUpTime), desc(leads.updatedAt));
@@ -870,21 +1282,27 @@ export async function fetchActiveLeadReminders(options: {
   if (rows.length === 0) return [];
 
   const leadIds = rows.map((r) => r.id);
-  const countRows = await db
-    .select({
-      leadId: leadRemarks.leadId,
-      total: count(),
-    })
-    .from(leadRemarks)
-    .where(inArray(leadRemarks.leadId, leadIds))
-    .groupBy(leadRemarks.leadId);
+  const [countRows, userNameMap, duplicatePhoneMap] = await Promise.all([
+    db
+      .select({
+        leadId: leadRemarks.leadId,
+        total: count(),
+      })
+      .from(leadRemarks)
+      .where(inArray(leadRemarks.leadId, leadIds))
+      .groupBy(leadRemarks.leadId),
+    fetchUserNameMap(),
+    options.isSuperAdmin ? fetchDuplicatePhoneMap() : Promise.resolve(undefined),
+  ]);
 
   const countMap = new Map<number, number>();
   for (const row of countRows) {
     countMap.set(row.leadId, Number(row.total));
   }
 
-  return rows.map((row) => mapLeadRow(row, countMap.get(row.id) ?? 0));
+  return rows.map((row) =>
+    mapLeadRow(row, countMap.get(row.id) ?? 0, userNameMap, duplicatePhoneMap)
+  );
 }
 
 export async function updateLeadReminderAction(
@@ -894,8 +1312,15 @@ export async function updateLeadReminderAction(
     followUpDate?: string | null;
     followUpTime?: string | null;
   },
-  access: { viewerUserId: number; viewerName: string; sessionTokenHash: string }
+  access: {
+    viewerUserId: number;
+    viewerName: string;
+    sessionTokenHash: string;
+    isSuperAdmin?: boolean;
+  }
 ): Promise<LeadItem | null> {
+  await ensureLeadsSchemaMigrated();
+
   const [existing] = await db
     .select()
     .from(leads)
@@ -923,7 +1348,7 @@ export async function updateLeadReminderAction(
         updatedAt: new Date(),
       })
       .where(eq(leads.id, leadId));
-    return fetchLeadById(leadId);
+    return fetchLeadById(leadId, access);
   }
 
   const nextDate = normalizeIsoDateInput(input.followUpDate);
@@ -943,7 +1368,7 @@ export async function updateLeadReminderAction(
     })
     .where(eq(leads.id, leadId));
 
-  return fetchLeadById(leadId);
+  return fetchLeadById(leadId, access);
 }
 
 export async function deleteLeadRecord(
@@ -1013,7 +1438,11 @@ export async function deleteLeadsBulk(
       access.viewerUserId
     );
     for (const row of targetRows) {
-      if (row.ownerUserId && row.ownerUserId !== access.viewerUserId && !unlocked.has(row.ownerUserId)) {
+      if (
+        row.ownerUserId &&
+        row.ownerUserId !== access.viewerUserId &&
+        !unlocked.has(row.ownerUserId)
+      ) {
         throw new LeadAccessDeniedError(
           'Security code required to delete selected colleague leads.',
           row.ownerUserId
@@ -1058,7 +1487,7 @@ export async function transferLeadsBySuperAdmin(input: {
   targetUserId: number;
   targetOwnerName: string;
 }> {
-  await ensureLeadOwnersBackfilled();
+  await ensureLeadsSchemaMigrated();
 
   const [targetUser] = await db
     .select()
@@ -1090,7 +1519,11 @@ export async function transferLeadsBySuperAdmin(input: {
       .select()
       .from(leads)
       .where(inArray(leads.id, cleanLeadIds));
-  } else if (input.fromUserId && Number.isInteger(input.fromUserId) && input.fromUserId > 0) {
+  } else if (
+    input.fromUserId &&
+    Number.isInteger(input.fromUserId) &&
+    input.fromUserId > 0
+  ) {
     if (input.fromUserId === targetUser.id) {
       throw new Error('Source and destination users must be different.');
     }
@@ -1152,8 +1585,11 @@ export async function transferLeadsBySuperAdmin(input: {
 
 export async function bulkImportLeadRecords(
   rows: Array<{
+    leadCode?: string;
     name?: string;
     phone?: string;
+    email?: string;
+    leadType?: string;
     remark?: string;
     status?: string;
     source?: string;
@@ -1169,6 +1605,8 @@ export async function bulkImportLeadRecords(
   updatedCount: number;
   skippedCount: number;
 }> {
+  await ensureLeadsSchemaMigrated();
+
   if (access && ownerUserId !== access.viewerUserId) {
     const allowed = await hasLeadOwnerAccess(
       access.sessionTokenHash,
@@ -1211,7 +1649,14 @@ export async function bulkImportLeadRecords(
     }
 
     const status = normalizeLeadStatus(row.status);
-    const source = row.source ? normalizeLeadSource(row.source) : 'csv_import';
+    const source = row.source ? normalizeLeadSource(row.source) : 'import';
+    const leadType = row.leadType ? normalizeLeadType(row.leadType) : 'retail';
+    let email: string | null = null;
+    try {
+      email = normalizeEmailInput(row.email);
+    } catch {
+      email = null;
+    }
     const leadDate = normalizeIsoDateInput(row.leadDate) ?? getTodayIsoDate();
     const followUpDate = normalizeIsoDateInput(row.followUpDate);
     const remark = (row.remark || '').trim();
@@ -1224,6 +1669,8 @@ export async function bulkImportLeadRecords(
           .update(leads)
           .set({
             name: cleanName || existing.name,
+            email: email ?? existing.email,
+            leadType: row.leadType ? leadType : existing.leadType,
             campaignName: campaignName ?? existing.campaignName,
             status: row.status ? status : existing.status,
             latestRemark: remark || existing.latestRemark,
@@ -1249,20 +1696,31 @@ export async function bulkImportLeadRecords(
       });
       updatedCount += 1;
     } else {
+      let assignedLeadCode: string;
+      try {
+        assignedLeadCode = await resolveAndValidateLeadCode(row.leadCode);
+      } catch {
+        assignedLeadCode = await generateNextLeadCode();
+      }
+
       const [inserted] = await db
         .insert(leads)
         .values({
+          leadCode: assignedLeadCode,
           ownerUserId: ownerInfo.ownerUserId,
           ownerName: ownerInfo.ownerName,
           name: cleanName,
           phone: phoneInfo.displayPhone,
           normalizedPhone: phoneInfo.normalizedPhone,
+          email,
+          leadType,
           source,
           campaignName,
           status,
           latestRemark: remark,
           leadDate,
           followUpDate,
+          watcherUserIds: [],
           createdBy: actor,
           updatedBy: actor,
         })
@@ -1284,7 +1742,11 @@ export async function bulkImportLeadRecords(
     }
   }
 
-  if (access && ownerUserId !== access.viewerUserId && (createdCount > 0 || updatedCount > 0)) {
+  if (
+    access &&
+    ownerUserId !== access.viewerUserId &&
+    (createdCount > 0 || updatedCount > 0)
+  ) {
     await recordLeadAccessLog({
       viewerUserId: access.viewerUserId,
       viewerName: access.viewerName,
@@ -1357,6 +1819,8 @@ function pickFirstString(
 export async function ingestAiSensyWebhookLead(
   rawBody: unknown
 ): Promise<{ action: 'created' | 'updated'; lead: LeadItem }> {
+  await ensureLeadsSchemaMigrated();
+
   const root =
     rawBody && typeof rawBody === 'object'
       ? (rawBody as Record<string, unknown>)
@@ -1386,7 +1850,7 @@ export async function ingestAiSensyWebhookLead(
     phoneInfo.normalizedPhone.length < 7 ||
     phoneInfo.normalizedPhone.length > 15
   ) {
-    throw new Error('Webhook payload missing a valid client phone number.');
+    throw new Error('Webhook payload missing a valid contact phone number.');
   }
 
   const rawName =
@@ -1399,11 +1863,13 @@ export async function ingestAiSensyWebhookLead(
       'firstName',
     ]) || `Lead (${phoneInfo.displayPhone})`;
 
+  const rawEmail = pickFirstString(merged, ['email', 'emailAddress']);
+  const rawLeadType = pickFirstString(merged, ['leadType', 'type', 'segment']);
   const campaignName =
     pickFirstString(merged, ['campaignName', 'campaign', 'topic']) || null;
 
   const rawSource = pickFirstString(merged, ['source', 'channel']);
-  const source = rawSource ? normalizeLeadSource(rawSource) : 'whatsapp';
+  const source = rawSource ? normalizeLeadSource(rawSource) : 'aisensy_organic';
 
   const ownerHint = pickFirstString(merged, [
     'ownerUsername',
@@ -1475,13 +1941,22 @@ export async function ingestAiSensyWebhookLead(
     return { action: 'updated', lead: updated! };
   }
 
+  let safeEmail: string | null = null;
+  try {
+    safeEmail = normalizeEmailInput(rawEmail);
+  } catch {
+    safeEmail = null;
+  }
+
   const created = await createLeadRecord({
     ownerUserId: matchedOwner?.id ?? null,
     name: rawName,
     phone: phoneInfo.displayPhone,
+    email: safeEmail,
+    leadType: rawLeadType ? normalizeLeadType(rawLeadType) : 'retail',
     source,
     campaignName,
-    status: 'call_needed',
+    status: 'new_lead',
     latestRemark: initialRemark,
     leadDate: today,
     followUpDate: today,

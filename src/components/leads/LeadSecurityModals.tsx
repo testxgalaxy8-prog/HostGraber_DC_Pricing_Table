@@ -138,7 +138,7 @@ export function MySecurityCodeModal({
 
           <div className="p-3 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-[#475569] leading-relaxed">
             Your leads stay private to your account by default. If a colleague selects{' '}
-            <strong className="text-[#0F172A]">Intervened By Your Name</strong>, they must enter
+            <strong className="text-[#0F172A]">Lead Owner: Your Name</strong>, they must enter
             this code, and every access is logged with an exact timestamp.
           </div>
 

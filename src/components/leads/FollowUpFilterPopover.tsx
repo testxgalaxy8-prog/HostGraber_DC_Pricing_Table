@@ -20,7 +20,7 @@ export type FollowUpFilter =
   | 'custom_date';
 
 const PRESET_OPTIONS: Array<{ value: Exclude<FollowUpFilter, 'custom_date'>; label: string }> = [
-  { value: 'all', label: 'All Follow-ups' },
+  { value: 'all', label: 'Follow Ups' },
   { value: 'due_or_overdue', label: 'Today & Overdue' },
   { value: 'overdue', label: 'Overdue Only' },
   { value: 'today', label: 'Follow-up Today' },
@@ -137,7 +137,7 @@ export function FollowUpFilterPopover({
   const triggerLabel =
     value === 'custom_date' && customDate
       ? formatLeadDisplayDate(customDate)
-      : PRESET_OPTIONS.find((opt) => opt.value === value)?.label || 'All Follow-ups';
+      : PRESET_OPTIONS.find((opt) => opt.value === value)?.label || 'Follow Ups';
 
   const isFiltered = value !== 'all';
 

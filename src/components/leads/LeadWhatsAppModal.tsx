@@ -22,6 +22,7 @@ import {
 } from '../../shared/quotation.ts';
 import type {
   BillingCycle,
+  CommunicationTemplate,
   HostingPlanFull,
   LeadItem,
   PortalSettings,
@@ -48,6 +49,8 @@ export function LeadWhatsAppModal({
   const [mode, setMode] = useState<ComposerMode>('followup');
   const [plans, setPlans] = useState<HostingPlanFull[]>([]);
   const [loadingPlans, setLoadingPlans] = useState(false);
+  const [savedTemplates, setSavedTemplates] = useState<CommunicationTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [selectedPlanId, setSelectedPlanId] = useState<string>('');
   const [selectedTenure, setSelectedTenure] = useState<'all' | BillingCycle>('all');
   const [message, setMessage] = useState('');
@@ -74,6 +77,7 @@ export function LeadWhatsAppModal({
     setMode('followup');
     setSubmitted(false);
     setSelectedTenure('all');
+    setSelectedTemplateId('');
     setLogToHistory(true);
 
     // Pre-fill lead's phone cleanly
@@ -89,6 +93,12 @@ export function LeadWhatsAppModal({
     }
 
     setMessage(buildTemplateMessage(lead, 'followup'));
+
+    apiFetch<CommunicationTemplate[]>('/api/communication-templates')
+      .then((list) => setSavedTemplates(list))
+      .catch(() => {
+        // Non-blocking fallback to built-in templates
+      });
 
     if (plans.length === 0) {
       setLoadingPlans(true);
@@ -155,11 +165,25 @@ export function LeadWhatsAppModal({
 
   const handleModeChange = (nextMode: ComposerMode) => {
     setMode(nextMode);
+    setSelectedTemplateId('');
     if (nextMode !== 'quote') {
       setMessage(buildTemplateMessage(lead, nextMode));
     } else if (!selectedPlanId && plans.length > 0) {
       setSelectedPlanId(String(plans[0].id));
     }
+  };
+
+  const handleSavedTemplatePick = (templateId: string) => {
+    setSelectedTemplateId(templateId);
+    if (!templateId) return;
+    const found = savedTemplates.find((t) => String(t.id) === templateId);
+    if (!found) return;
+    const company = settings.companyName || 'HostGraber';
+    const populated = found.content
+      .replace(/\{contact_name\}/gi, lead.name)
+      .replace(/\{lead_id\}/gi, lead.leadCode)
+      .replace(/\{company_name\}/gi, company);
+    setMessage(populated);
   };
 
   const logWhatsAppOutreach = () => {
@@ -247,7 +271,7 @@ export function LeadWhatsAppModal({
                 WhatsApp Lead · {lead.name}
               </h3>
               <p className="text-xs text-[#64748B] mt-0.5 font-mono-tabular">
-                {lead.phone}
+                {lead.leadCode} · {lead.phone}
                 {lead.campaignName ? ` · ${lead.campaignName}` : ''}
               </p>
             </div>
@@ -315,6 +339,26 @@ export function LeadWhatsAppModal({
               <span>Plan Quote</span>
             </button>
           </div>
+
+          {savedTemplates.length > 0 && mode !== 'quote' && (
+            <div>
+              <label className="block text-[11px] font-semibold text-[#475569] mb-1">
+                Communication Center Template (Optional)
+              </label>
+              <select
+                value={selectedTemplateId}
+                onChange={(e) => handleSavedTemplatePick(e.target.value)}
+                className="w-full px-2.5 py-2 text-xs bg-[#F8FAFC] border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:border-[#17C964]"
+              >
+                <option value="">— Use quick template above or pick saved template —</option>
+                {savedTemplates.map((tmpl) => (
+                  <option key={tmpl.id} value={String(tmpl.id)}>
+                    {tmpl.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {mode === 'quote' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 p-3 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0]">

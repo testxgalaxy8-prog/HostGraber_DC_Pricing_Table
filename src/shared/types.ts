@@ -24,6 +24,11 @@ export interface PortalUser {
   email: string;
   displayName: string | null;
   role: UserRole;
+  departmentId?: number | null;
+  departmentName?: string | null;
+  jobTitle?: string | null;
+  phone?: string | null;
+  avatarUrl?: string | null;
   mustChangePassword: boolean;
   isActive: boolean;
   hasLeadSecurityCode?: boolean;
@@ -254,22 +259,31 @@ export interface PlanChangeLogItem {
 }
 
 export type LeadStatus =
-  | 'positive'
-  | 'call_needed'
-  | 'deny'
-  | 'converted'
-  | 'existing_client'
-  | 'not_required';
+  | 'new_lead'
+  | 'positive_lead'
+  | 'quotation_shared'
+  | 'not_answering'
+  | 'meeting_scheduled'
+  | 'trial_given'
+  | 'existing_client_lead'
+  | 'future_prospect'
+  | 'won'
+  | 'lost'
+  | 'cold_lead'
+  | 'denied';
 
 export type LeadSource =
-  | 'manual'
-  | 'whatsapp'
-  | 'inbound_call'
-  | 'website'
+  | 'aisensy_ad'
+  | 'aisensy_organic'
+  | 'partner_enquiry'
   | 'referral'
-  | 'aisensy'
-  | 'csv_import'
+  | 'website_whmcs'
+  | 'import'
+  | 'website_grabee_ai'
+  | 'internal_team_reference'
   | 'other';
+
+export type LeadType = 'b2b' | 'retail';
 
 export interface LeadRemarkItem {
   id: number;
@@ -285,11 +299,14 @@ export interface LeadRemarkItem {
 
 export interface LeadItem {
   id: number;
+  leadCode: string;
   ownerUserId: number | null;
   ownerName: string;
   name: string;
   phone: string;
   normalizedPhone: string;
+  email: string | null;
+  leadType: LeadType;
   source: LeadSource;
   campaignName: string | null;
   status: LeadStatus;
@@ -298,6 +315,10 @@ export interface LeadItem {
   followUpDate: string | null;
   followUpTime: string | null;
   reminderNotifiedAt: string | null;
+  dealValue: number | null;
+  watcherUserIds: number[];
+  watcherNames: string[];
+  duplicatePhoneCount?: number;
   createdBy: string;
   updatedBy: string;
   createdAt: string;
@@ -306,7 +327,7 @@ export interface LeadItem {
   remarks?: LeadRemarkItem[];
 }
 
-export type LeadInterventionScope = 'me' | 'any' | 'other' | 'user';
+export type LeadInterventionScope = 'me' | 'any' | 'other' | 'watched' | 'user';
 
 export interface LeadColleagueOption {
   id: number;
@@ -316,6 +337,7 @@ export interface LeadColleagueOption {
   hasSecurityCode: boolean;
   unlocked: boolean;
   leadCount: number;
+  watchedLeadCount?: number;
 }
 
 export interface LeadAccessLogItem {
@@ -336,6 +358,7 @@ export interface LeadWebhookConfig {
 
 export interface LeadTransferCandidate {
   id: number;
+  leadCode: string;
   name: string;
   phone: string;
   status: LeadStatus;
@@ -345,4 +368,161 @@ export interface LeadTransferCandidate {
   ownerName: string;
 }
 
+export type KnowledgebaseCategory =
+  | 'product_documentation'
+  | 'technical_documentation'
+  | 'faqs'
+  | 'objection_handling'
+  | 'company_resources';
+
+export interface KnowledgebaseArticle {
+  id: number;
+  category: KnowledgebaseCategory;
+  title: string;
+  summary: string | null;
+  content: string;
+  tags: string | null;
+  isPinned: boolean;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CommunicationCategory =
+  | 'email_templates'
+  | 'whatsapp_templates'
+  | 'sales_responses'
+  | 'support_responses'
+  | 'follow_up_templates'
+  | 'canned_responses';
+
+export interface CommunicationTemplate {
+  id: number;
+  category: CommunicationCategory;
+  title: string;
+  subject: string | null;
+  content: string;
+  tags: string | null;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DepartmentItem {
+  id: number;
+  name: string;
+  description: string | null;
+  leadName: string | null;
+  memberCount?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TeamTargetItem {
+  id: number;
+  userId: number;
+  userDisplayName: string;
+  username: string;
+  departmentName: string | null;
+  monthKey: string;
+  leadsTarget: number;
+  wonTarget: number;
+  revenueTarget: number;
+  notes: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AnalyticsStatusRow {
+  status: LeadStatus;
+  count: number;
+  percentage: number;
+  pipelineValue: number;
+}
+
+export interface AnalyticsSourceRow {
+  source: LeadSource;
+  totalLeads: number;
+  wonLeads: number;
+  conversionRate: number;
+  revenue: number;
+}
+
+export interface AnalyticsMonthlyRow {
+  monthKey: string;
+  label: string;
+  newLeads: number;
+  wonLeads: number;
+  revenue: number;
+}
+
+export interface AnalyticsTeamRow {
+  userId: number;
+  displayName: string;
+  username: string;
+  departmentName: string | null;
+  avatarUrl?: string | null;
+  totalLeads: number;
+  newLeadsThisMonth: number;
+  activeFollowUps: number;
+  wonLeads: number;
+  conversionRate: number;
+  wonRevenue: number;
+  leadsTarget: number;
+  wonTarget: number;
+  revenueTarget: number;
+}
+
+export interface ReportsAnalyticsData {
+  monthKey: string;
+  summary: {
+    totalLeads: number;
+    activePipeline: number;
+    wonLeads: number;
+    lostAndDenied: number;
+    conversionRate: number;
+    wonRevenue: number;
+    pipelineValue: number;
+    b2bCount: number;
+    retailCount: number;
+  };
+  byStatus: AnalyticsStatusRow[];
+  bySource: AnalyticsSourceRow[];
+  monthlyTrend: AnalyticsMonthlyRow[];
+  teamPerformance: AnalyticsTeamRow[];
+}
+
+export interface CombinedDashboardData {
+  leadSummary: {
+    totalLeads: number;
+    newToday: number;
+    followUpsDue: number;
+    overdue: number;
+    wonCount: number;
+    positiveCount: number;
+    recentLeads: Array<{
+      id: number;
+      leadCode: string;
+      name: string;
+      phone: string;
+      status: LeadStatus;
+      source: LeadSource;
+      leadDate: string;
+      followUpDate: string | null;
+      ownerName: string;
+    }>;
+  };
+  catalogSummary: {
+    totalPlans: number;
+    activePlans: number;
+    categoriesCount: number;
+    lastImportAt: string | null;
+    recentPlans: HostingPlanFull[];
+    recentImports: ImportHistoryItem[];
+    recentPriceChanges: PricingHistoryItem[];
+  };
+}
 

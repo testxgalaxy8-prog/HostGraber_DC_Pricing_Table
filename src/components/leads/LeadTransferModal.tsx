@@ -226,6 +226,9 @@ export function LeadTransferModal({
                     className="flex items-center justify-between gap-2"
                   >
                     <span className="truncate font-medium text-[#0F172A]">
+                      <span className="font-mono-tabular text-[11px] text-[#64748B] mr-1.5">
+                        {lead.leadCode}
+                      </span>
                       {lead.name}
                     </span>
                     <span className="text-[11px] text-[#64748B] shrink-0">

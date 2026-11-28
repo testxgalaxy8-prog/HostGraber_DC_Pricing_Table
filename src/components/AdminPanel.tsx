@@ -1,26 +1,47 @@
 import { useState } from 'react';
 import type {
   CategoryItem,
+  CommunicationCategory,
   HostingPlanFull,
+  KnowledgebaseCategory,
   PortalSettings,
   PortalUser,
 } from '../shared/types.ts';
-import { AdminDashboard } from './admin/AdminDashboard.tsx';
+import { AdminDashboard, type DashboardTargetTab } from './admin/AdminDashboard.tsx';
 import { ExcelUploadView } from './admin/ExcelUploadView.tsx';
 import { ManagePlansView } from './admin/ManagePlansView.tsx';
 import { PricingHistoryView } from './admin/PricingHistoryView.tsx';
-import { UserManagementView } from './admin/UserManagementView.tsx';
-import { LogoManagementView } from './admin/LogoManagementView.tsx';
 import { SettingsView } from './admin/SettingsView.tsx';
 import { PlanDetailsView } from './PlanDetailsView.tsx';
+import { KnowledgebaseView } from './portal/KnowledgebaseView.tsx';
+import { CommunicationCenterView } from './portal/CommunicationCenterView.tsx';
+import {
+  ReportsAnalyticsView,
+  type ReportsSubTab,
+} from './portal/ReportsAnalyticsView.tsx';
+import {
+  TeamManagementView,
+  type TeamManagementSubTab,
+} from './portal/TeamManagementView.tsx';
+import { IntegrationsApiView } from './portal/IntegrationsApiView.tsx';
+import {
+  LogsCenterView,
+  type LogsCenterTab,
+} from './portal/LogsCenterView.tsx';
+import { ProfileView, type ProfileSubTab } from './portal/ProfileView.tsx';
 
 export type AdminTab =
   | 'dashboard'
   | 'upload'
   | 'plans'
   | 'history'
-  | 'users'
-  | 'logo'
+  | 'knowledgebase'
+  | 'communication'
+  | 'reports'
+  | 'team'
+  | 'integrations'
+  | 'logs'
+  | 'profile'
   | 'settings';
 
 export function AdminPanel({
@@ -28,9 +49,17 @@ export function AdminPanel({
   settings,
   categories,
   activeTab,
+  kbCategory = 'all',
+  commCategory = 'all',
+  reportsTab = 'sales',
+  teamTab = 'directory',
+  logsTab = 'access',
+  profileTab = 'avatar',
   inspectPlan,
   onInspectPlanChange,
   onChangeTab,
+  onNavigateLeads,
+  onOpenLead,
   onRefreshContext,
   onToast,
 }: {
@@ -38,9 +67,17 @@ export function AdminPanel({
   settings: PortalSettings;
   categories: CategoryItem[];
   activeTab: AdminTab;
+  kbCategory?: KnowledgebaseCategory | 'all';
+  commCategory?: CommunicationCategory | 'all';
+  reportsTab?: ReportsSubTab;
+  teamTab?: TeamManagementSubTab;
+  logsTab?: LogsCenterTab;
+  profileTab?: ProfileSubTab;
   inspectPlan: HostingPlanFull | null;
   onInspectPlanChange: (plan: HostingPlanFull | null) => void;
   onChangeTab: (tab: AdminTab) => void;
+  onNavigateLeads: () => void;
+  onOpenLead: (leadId: number) => void;
   onRefreshContext: () => Promise<void>;
   onToast: (type: 'success' | 'error', text: string) => void;
 }) {
@@ -51,7 +88,7 @@ export function AdminPanel({
       <PlanDetailsView
         plan={inspectPlan}
         settings={settings}
-        canEdit={true}
+        canEdit={user.role === 'super_admin'}
         onBack={() => onInspectPlanChange(null)}
         onEdit={(p) => {
           onInspectPlanChange(null);
@@ -63,14 +100,22 @@ export function AdminPanel({
     );
   }
 
+  const handleDashboardNavigate = (target: DashboardTargetTab) => {
+    if (target === 'leads') {
+      onNavigateLeads();
+      return;
+    }
+    onChangeTab(target);
+  };
+
   return (
     <div className="max-w-7xl mx-auto">
       {activeTab === 'dashboard' && (
         <AdminDashboard
           user={user}
           settings={settings}
-          categoriesCount={categories.length}
-          onNavigate={onChangeTab}
+          onNavigate={handleDashboardNavigate}
+          onOpenLead={onOpenLead}
           onViewPlan={(p) => onInspectPlanChange(p)}
           onEditPlan={(p) => {
             setEditPlan(p);
@@ -79,14 +124,19 @@ export function AdminPanel({
         />
       )}
 
-      {activeTab === 'upload' && (
-        <ExcelUploadView
-          settings={settings}
-          categories={categories}
-          onImportCompleted={onRefreshContext}
-          onToast={onToast}
-        />
-      )}
+      {activeTab === 'upload' &&
+        (user.role === 'super_admin' ? (
+          <ExcelUploadView
+            settings={settings}
+            categories={categories}
+            onImportCompleted={onRefreshContext}
+            onToast={onToast}
+          />
+        ) : (
+          <div className="bg-white border border-[#E2E8F0] rounded-xl p-8 text-center text-sm text-[#64748B]">
+            Excel Catalog Import is restricted to Super Admin accounts.
+          </div>
+        ))}
 
       {activeTab === 'plans' && (
         <ManagePlansView
@@ -105,14 +155,67 @@ export function AdminPanel({
         <PricingHistoryView settings={settings} onToast={onToast} />
       )}
 
-      {activeTab === 'users' && (
-        <UserManagementView currentUser={user} onToast={onToast} />
+      {activeTab === 'knowledgebase' && (
+        <KnowledgebaseView
+          initialCategory={kbCategory}
+          userRole={user.role}
+          onToast={onToast}
+        />
       )}
 
-      {activeTab === 'logo' && (
-        <LogoManagementView
+      {activeTab === 'communication' && (
+        <CommunicationCenterView
+          initialCategory={commCategory}
+          userRole={user.role}
+          onToast={onToast}
+        />
+      )}
+
+      {activeTab === 'reports' && (
+        <ReportsAnalyticsView
+          initialTab={reportsTab}
           settings={settings}
-          onSaved={onRefreshContext}
+          onToast={onToast}
+        />
+      )}
+
+      {activeTab === 'team' &&
+        (user.role === 'super_admin' ? (
+          <TeamManagementView
+            currentUser={user}
+            settings={settings}
+            initialTab={teamTab}
+            onToast={onToast}
+          />
+        ) : (
+          <div className="bg-white border border-[#E2E8F0] rounded-xl p-8 text-center text-sm text-[#64748B]">
+            Team Management is restricted to Super Admin accounts.
+          </div>
+        ))}
+
+      {activeTab === 'integrations' &&
+        (user.role === 'super_admin' ? (
+          <IntegrationsApiView onToast={onToast} />
+        ) : (
+          <div className="bg-white border border-[#E2E8F0] rounded-xl p-8 text-center text-sm text-[#64748B]">
+            Integrations &amp; API is restricted to Super Admin accounts.
+          </div>
+        ))}
+
+      {activeTab === 'logs' && (
+        <LogsCenterView
+          settings={settings}
+          initialTab={logsTab}
+          onToast={onToast}
+        />
+      )}
+
+      {activeTab === 'profile' && (
+        <ProfileView
+          user={user}
+          settings={settings}
+          initialTab={profileTab}
+          onRefreshSession={onRefreshContext}
           onToast={onToast}
         />
       )}

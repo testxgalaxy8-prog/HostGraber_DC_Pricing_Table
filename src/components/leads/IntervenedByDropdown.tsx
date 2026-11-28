@@ -29,6 +29,7 @@ export function IntervenedByDropdown({
   scope,
   targetUserId,
   myLeadCount,
+  watchedLeadCount = 0,
   currentCount,
   colleagues,
   onSelectScope,
@@ -38,6 +39,7 @@ export function IntervenedByDropdown({
   scope: LeadInterventionScope;
   targetUserId: number | null;
   myLeadCount: number;
+  watchedLeadCount?: number;
   currentCount: number;
   colleagues: LeadColleagueOption[];
   onSelectScope: (nextScope: LeadInterventionScope, nextUserId: number | null) => void;
@@ -95,12 +97,14 @@ export function IntervenedByDropdown({
 
   const activeLabel =
     scope === 'me'
-      ? 'Me'
+      ? 'Lead Owner: Me'
       : scope === 'any'
-        ? 'Any'
+        ? 'Lead Owner: Any'
         : scope === 'other'
-          ? 'Other'
-          : activeColleague?.displayName || 'Colleague';
+          ? 'Lead Owner: Other'
+          : scope === 'watched'
+            ? 'Watched by Me'
+            : `Lead Owner: ${activeColleague?.displayName || 'Colleague'}`;
 
   const filteredColleagues = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -112,9 +116,11 @@ export function IntervenedByDropdown({
     );
   }, [colleagues, query]);
 
-  const showMeOption = !query.trim() || 'intervened by me'.includes(query.trim().toLowerCase());
-  const showAnyOption = !query.trim() || 'intervened by any'.includes(query.trim().toLowerCase());
-  const showOtherOption = !query.trim() || 'intervened by other'.includes(query.trim().toLowerCase());
+  const qLower = query.trim().toLowerCase();
+  const showMeOption = !qLower || 'lead owner me'.includes(qLower);
+  const showAnyOption = !qLower || 'lead owner any'.includes(qLower);
+  const showOtherOption = !qLower || 'lead owner other'.includes(qLower);
+  const showWatchedOption = !qLower || 'watched by me watcher'.includes(qLower);
 
   return (
     <div ref={containerRef} className="relative w-full sm:w-auto">
@@ -130,7 +136,7 @@ export function IntervenedByDropdown({
         }`}
       >
         <span className="truncate">
-          Intervened By {activeLabel} ({currentCount})
+          {activeLabel} ({currentCount})
         </span>
         {open ? (
           <ChevronUp className="w-3.5 h-3.5 text-[#64748B] shrink-0" />
@@ -148,7 +154,7 @@ export function IntervenedByDropdown({
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search by name"
+                placeholder="Search by team member"
                 className="w-full pl-3 pr-8 py-2 text-xs bg-[#F1F5F9] border border-transparent rounded-lg text-[#0F172A] placeholder:text-[#64748B] focus:outline-none focus:bg-white focus:border-[#17C964]"
               />
               <Search className="w-3.5 h-3.5 text-[#64748B] absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -173,7 +179,7 @@ export function IntervenedByDropdown({
                   <span className="w-7 h-7 rounded-full bg-[#FEF2F2] text-[#DC2626] text-[11px] font-bold flex items-center justify-center shrink-0">
                     ME
                   </span>
-                  <span className="truncate">Intervened By Me</span>
+                  <span className="truncate">Lead Owner: Me</span>
                 </span>
                 <span className="flex items-center gap-2 shrink-0">
                   <span className="font-mono-tabular text-[11px] text-[#64748B]">
@@ -201,7 +207,7 @@ export function IntervenedByDropdown({
                   <span className="w-7 h-7 rounded-full bg-[#FEF2F2] text-[#DC2626] text-[11px] font-bold flex items-center justify-center shrink-0">
                     AY
                   </span>
-                  <span className="truncate">Intervened By Any</span>
+                  <span className="truncate">Lead Owner: Any</span>
                 </span>
                 <span className="font-mono-tabular text-[11px] text-[#64748B] shrink-0">
                   {anyCount}
@@ -226,10 +232,35 @@ export function IntervenedByDropdown({
                   <span className="w-7 h-7 rounded-full bg-[#FEF2F2] text-[#DC2626] text-[11px] font-bold flex items-center justify-center shrink-0">
                     OT
                   </span>
-                  <span className="truncate">Intervened By Other</span>
+                  <span className="truncate">Lead Owner: Other</span>
                 </span>
                 <span className="font-mono-tabular text-[11px] text-[#64748B] shrink-0">
                   {unlockedOthersCount}
+                </span>
+              </button>
+            )}
+
+            {showWatchedOption && (
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectScope('watched', null);
+                  setOpen(false);
+                }}
+                className={`w-full px-3 py-2.5 flex items-center justify-between gap-2.5 text-left text-xs transition-colors cursor-pointer ${
+                  scope === 'watched'
+                    ? 'bg-[#ECFDF5] font-semibold text-[#065F46]'
+                    : 'text-[#334155] hover:bg-[#F8FAFC]'
+                }`}
+              >
+                <span className="flex items-center gap-2.5 min-w-0">
+                  <span className="w-7 h-7 rounded-full bg-[#ECFDF5] text-[#059669] text-[11px] font-bold flex items-center justify-center shrink-0">
+                    WT
+                  </span>
+                  <span className="truncate">Watched by Me</span>
+                </span>
+                <span className="font-mono-tabular text-[11px] text-[#64748B] shrink-0">
+                  {watchedLeadCount}
                 </span>
               </button>
             )}
@@ -270,7 +301,7 @@ export function IntervenedByDropdown({
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">
-                        Intervened By {colleague.displayName}
+                        Lead Owner: {colleague.displayName}
                       </span>
                       <span className="block text-[10px] text-[#64748B] font-normal">
                         {colleague.unlocked

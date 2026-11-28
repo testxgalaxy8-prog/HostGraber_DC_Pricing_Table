@@ -3,10 +3,12 @@ import {
   ALL_LEAD_STATUSES,
   LEAD_SOURCE_LABELS,
   LEAD_STATUS_META,
+  LEAD_TYPE_LABELS,
   formatLeadDisplayDate,
   formatLeadDisplayTime,
   getFollowUpUrgency,
   getTodayIsoDate,
+  isClosedLeadStatus,
 } from '../shared/leads.ts';
 import type { LeadItem, LeadSource } from '../shared/types.ts';
 
@@ -31,9 +33,10 @@ function sanitizeCsvCell(value: unknown): string {
 }
 
 function getPriorityLabel(lead: LeadItem, todayStr: string): string {
-  if (lead.status === 'converted') return 'Converted';
-  if (lead.status === 'deny') return 'Closed / Deny';
-  if (lead.status === 'not_required') return 'Closed / Not Required';
+  if (lead.status === 'won') return 'Won';
+  if (isClosedLeadStatus(lead.status)) {
+    return `Closed / ${LEAD_STATUS_META[lead.status].label}`;
+  }
   const urgency = getFollowUpUrgency(lead.followUpDate, lead.status, todayStr);
   if (urgency === 'overdue') return 'Overdue Follow-up';
   if (urgency === 'today') return 'Due Today';
@@ -100,9 +103,13 @@ export function exportLeadsFile({
 
   if (format === 'csv') {
     const header = [
-      'Client Name',
-      'Mobile Number',
-      'Owner',
+      'Lead ID',
+      'Contact Name',
+      'Contact Number',
+      'Email',
+      'Lead Type',
+      'Lead Owner',
+      'Lead Watchers',
       'Lead Status',
       'Follow-up Priority',
       'Latest Call Remark',
@@ -120,9 +127,13 @@ export function exportLeadsFile({
       header.map(sanitizeCsvCell).join(','),
       ...leads.map((lead) =>
         [
+          lead.leadCode,
           lead.name,
           lead.phone,
+          lead.email || '',
+          LEAD_TYPE_LABELS[lead.leadType],
           lead.ownerName,
+          lead.watcherNames.join(', '),
           LEAD_STATUS_META[lead.status].label,
           getPriorityLabel(lead, todayStr),
           lead.latestRemark,
@@ -149,9 +160,13 @@ export function exportLeadsFile({
 
   // Excel Workbook (.xlsx)
   const headers = [
-    'Client Name',
-    'Mobile Number',
-    'Owner',
+    'Lead ID',
+    'Contact Name',
+    'Contact Number',
+    'Email',
+    'Lead Type',
+    'Lead Owner',
+    'Lead Watchers',
     'Lead Status',
     'Follow-up Priority',
     'Latest Call Remark',
@@ -166,9 +181,13 @@ export function exportLeadsFile({
   ];
 
   const rows: Array<Array<string | number>> = leads.map((lead) => [
+    sanitizeSpreadsheetText(lead.leadCode),
     sanitizeSpreadsheetText(lead.name),
     sanitizeSpreadsheetText(lead.phone, true),
+    sanitizeSpreadsheetText(lead.email || ''),
+    LEAD_TYPE_LABELS[lead.leadType],
     sanitizeSpreadsheetText(lead.ownerName),
+    sanitizeSpreadsheetText(lead.watcherNames.join(', ')),
     LEAD_STATUS_META[lead.status].label,
     getPriorityLabel(lead, todayStr),
     sanitizeSpreadsheetText(lead.latestRemark || ''),

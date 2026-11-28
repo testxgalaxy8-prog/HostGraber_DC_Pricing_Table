@@ -29,6 +29,7 @@ export function ManagePlansView({
   onCategoriesChanged: () => Promise<void>;
   onToast: (type: 'success' | 'error', text: string) => void;
 }) {
+  const isSuperAdmin = userRole === 'super_admin';
   const [plans, setPlans] = useState<HostingPlanFull[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -251,31 +252,33 @@ export function ManagePlansView({
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-xl font-semibold tracking-tight text-[#0F172A]">
-          Manage Plans
+          {isSuperAdmin ? 'Manage Plans' : 'Hosting Plans'}
         </h1>
 
-        <div className="flex items-center gap-2.5">
-          <button
-            type="button"
-            onClick={() => setShowCategoriesPanel((v) => !v)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-[#334155] bg-white border border-[#CBD5E1] rounded-lg hover:border-[#94A3B8] hover:text-[#0F172A] transition-colors cursor-pointer whitespace-nowrap"
-          >
-            <FolderPlus className="w-4 h-4 text-[#059669]" />
-            <span>Categories</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setCreatingPlan(true)}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Plan</span>
-          </button>
-        </div>
+        {isSuperAdmin && (
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => setShowCategoriesPanel((v) => !v)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-[#334155] bg-white border border-[#CBD5E1] rounded-lg hover:border-[#94A3B8] hover:text-[#0F172A] transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <FolderPlus className="w-4 h-4 text-[#059669]" />
+              <span>Categories</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreatingPlan(true)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-[#04120A] bg-[#17C964] hover:bg-[#10B981] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add Plan</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Category Manager Drawer */}
-      {showCategoriesPanel && (
+      {isSuperAdmin && showCategoriesPanel && (
         <section className="bg-white border border-[#E2E8F0] rounded-lg p-5 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-[#0F172A]">
@@ -371,7 +374,7 @@ export function ManagePlansView({
 
       {/* Plans Table */}
       <div className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
-        {selectedIds.length > 0 && (
+        {isSuperAdmin && selectedIds.length > 0 && (
           <div
             className={`px-5 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center justify-between gap-3 ${
               confirmBulkDelete ? 'bg-[#FEF2F2]' : 'bg-[#F8FAFC]'
@@ -457,17 +460,19 @@ export function ManagePlansView({
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-xs font-semibold text-[#64748B]">
-                  <th className="py-3 pl-5 pr-2 w-10">
-                    <input
-                      ref={selectAllRef}
-                      type="checkbox"
-                      checked={allFilteredSelected}
-                      onChange={toggleSelectAllFiltered}
-                      disabled={bulkDeleting}
-                      aria-label="Select all visible plans"
-                      className="w-4 h-4 rounded border-[#CBD5E1] accent-[#17C964] cursor-pointer align-middle"
-                    />
-                  </th>
+                  {isSuperAdmin && (
+                    <th className="py-3 pl-5 pr-2 w-10">
+                      <input
+                        ref={selectAllRef}
+                        type="checkbox"
+                        checked={allFilteredSelected}
+                        onChange={toggleSelectAllFiltered}
+                        disabled={bulkDeleting}
+                        aria-label="Select all visible plans"
+                        className="w-4 h-4 rounded border-[#CBD5E1] accent-[#17C964] cursor-pointer align-middle"
+                      />
+                    </th>
+                  )}
                   <th className="py-3 px-4">Plan Name</th>
                   <th className="py-3 px-4">Category</th>
                   <th className="py-3 px-4 text-right">Monthly Rate</th>
@@ -503,16 +508,18 @@ export function ManagePlansView({
                           : 'hover:bg-[#F8FAFC]'
                       }`}
                     >
-                      <td className="py-3 pl-5 pr-2 w-10">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleSelectPlan(plan.id)}
-                          disabled={bulkDeleting}
-                          aria-label={`Select ${plan.name}`}
-                          className="w-4 h-4 rounded border-[#CBD5E1] accent-[#17C964] cursor-pointer align-middle"
-                        />
-                      </td>
+                      {isSuperAdmin && (
+                        <td className="py-3 pl-5 pr-2 w-10">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelectPlan(plan.id)}
+                            disabled={bulkDeleting}
+                            aria-label={`Select ${plan.name}`}
+                            className="w-4 h-4 rounded border-[#CBD5E1] accent-[#17C964] cursor-pointer align-middle"
+                          />
+                        </td>
+                      )}
                       <td className="py-3 px-4">
                         <div className="font-semibold text-[#0F172A]">{plan.name}</div>
                         <div className="text-xs text-[#64748B]">
@@ -572,45 +579,49 @@ export function ManagePlansView({
                         >
                           View
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setEditingPlan(plan)}
-                          className="text-xs font-semibold text-[#059669] hover:text-[#047857] hover:underline cursor-pointer"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleToggleStatus(plan)}
-                          className="text-xs font-medium text-[#475569] hover:text-[#0F172A] cursor-pointer"
-                        >
-                          {plan.isActive ? 'Deactivate' : 'Activate'}
-                        </button>
-                        {confirmDeleteId === plan.id ? (
-                          <span className="inline-flex items-center gap-1.5">
+                        {isSuperAdmin && (
+                          <>
                             <button
                               type="button"
-                              onClick={() => handleDeletePlan(plan.id)}
-                              className="text-xs font-semibold text-[#DC2626] hover:underline cursor-pointer"
+                              onClick={() => setEditingPlan(plan)}
+                              className="text-xs font-semibold text-[#059669] hover:text-[#047857] hover:underline cursor-pointer"
                             >
-                              Confirm
+                              Edit
                             </button>
                             <button
                               type="button"
-                              onClick={() => setConfirmDeleteId(null)}
-                              className="text-xs text-[#64748B] hover:text-[#0F172A] cursor-pointer"
+                              onClick={() => handleToggleStatus(plan)}
+                              className="text-xs font-medium text-[#475569] hover:text-[#0F172A] cursor-pointer"
                             >
-                              Cancel
+                              {plan.isActive ? 'Deactivate' : 'Activate'}
                             </button>
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteId(plan.id)}
-                            className="text-xs font-semibold text-[#DC2626] hover:text-red-700 cursor-pointer"
-                          >
-                            Delete
-                          </button>
+                            {confirmDeleteId === plan.id ? (
+                              <span className="inline-flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeletePlan(plan.id)}
+                                  className="text-xs font-semibold text-[#DC2626] hover:underline cursor-pointer"
+                                >
+                                  Confirm
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(null)}
+                                  className="text-xs text-[#64748B] hover:text-[#0F172A] cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteId(plan.id)}
+                                className="text-xs font-semibold text-[#DC2626] hover:text-red-700 cursor-pointer"
+                              >
+                                Delete
+                              </button>
+                            )}
+                          </>
                         )}
                       </td>
                     </tr>
@@ -622,7 +633,7 @@ export function ManagePlansView({
         )}
       </div>
 
-      {(creatingPlan || editingPlan) && (
+      {isSuperAdmin && (creatingPlan || editingPlan) && (
         <PlanEditorModal
           plan={editingPlan}
           categories={categories}

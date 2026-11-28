@@ -11,6 +11,15 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
+export const departments = pgTable('departments', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  description: text('description'),
+  leadName: text('lead_name'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
   username: text('username').notNull().unique(),
@@ -19,6 +28,10 @@ export const users = pgTable('users', {
   passwordHash: text('password_hash').notNull(),
   leadSecurityCodeHash: text('lead_security_code_hash'),
   role: text('role').notNull().default('admin'), // 'super_admin' | 'admin'
+  departmentId: integer('department_id').references(() => departments.id, { onDelete: 'set null' }),
+  jobTitle: text('job_title'),
+  phone: text('phone'),
+  avatarUrl: text('avatar_url'),
   mustChangePassword: boolean('must_change_password').notNull().default(false),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -217,19 +230,24 @@ export const planOffersRelations = relations(planOffers, ({ one }) => ({
 
 export const leads = pgTable('leads', {
   id: serial('id').primaryKey(),
+  leadCode: text('lead_code'),
   ownerUserId: integer('owner_user_id').references(() => users.id, { onDelete: 'set null' }),
   ownerName: text('owner_name').notNull().default(''),
   name: text('name').notNull(),
   phone: text('phone').notNull(),
   normalizedPhone: text('normalized_phone').notNull(),
-  source: text('source').notNull().default('manual'),
+  email: text('email'),
+  leadType: text('lead_type').notNull().default('retail'),
+  source: text('source').notNull().default('other'),
   campaignName: text('campaign_name'),
-  status: text('status').notNull().default('call_needed'),
+  status: text('status').notNull().default('new_lead'),
   latestRemark: text('latest_remark').notNull().default(''),
   leadDate: text('lead_date').notNull(),
   followUpDate: text('follow_up_date'),
   followUpTime: text('follow_up_time'),
   reminderNotifiedAt: timestamp('reminder_notified_at'),
+  dealValue: doublePrecision('deal_value'),
+  watcherUserIds: jsonb('watcher_user_ids').$type<number[]>().notNull().default([]),
   createdBy: text('created_by').notNull().default('admin'),
   updatedBy: text('updated_by').notNull().default('admin'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -278,6 +296,61 @@ export const leadAccessLogs = pgTable('lead_access_logs', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+export const knowledgebaseArticles = pgTable('knowledgebase_articles', {
+  id: serial('id').primaryKey(),
+  category: text('category').notNull(),
+  title: text('title').notNull(),
+  summary: text('summary'),
+  content: text('content').notNull(),
+  tags: text('tags'),
+  isPinned: boolean('is_pinned').notNull().default(false),
+  createdBy: text('created_by').notNull().default('system'),
+  updatedBy: text('updated_by').notNull().default('system'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const knowledgebaseImages = pgTable('knowledgebase_images', {
+  id: serial('id').primaryKey(),
+  mimeType: text('mime_type').notNull(),
+  filename: text('filename').notNull(),
+  dataBase64: text('data_base64').notNull(),
+  uploadedBy: text('uploaded_by').notNull().default('super_admin'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const communicationTemplates = pgTable('communication_templates', {
+  id: serial('id').primaryKey(),
+  category: text('category').notNull(),
+  title: text('title').notNull(),
+  subject: text('subject'),
+  content: text('content').notNull(),
+  tags: text('tags'),
+  createdBy: text('created_by').notNull().default('system'),
+  updatedBy: text('updated_by').notNull().default('system'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const teamTargets = pgTable(
+  'team_targets',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    monthKey: text('month_key').notNull(),
+    leadsTarget: integer('leads_target').notNull().default(0),
+    wonTarget: integer('won_target').notNull().default(0),
+    revenueTarget: doublePrecision('revenue_target').notNull().default(0),
+    notes: text('notes'),
+    createdBy: text('created_by').notNull().default('super_admin'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex('team_targets_user_month_idx').on(table.userId, table.monthKey)]
+);
+
 export const leadsRelations = relations(leads, ({ one, many }) => ({
   owner: one(users, {
     fields: [leads.ownerUserId],
@@ -292,3 +365,4 @@ export const leadRemarksRelations = relations(leadRemarks, ({ one }) => ({
     references: [leads.id],
   }),
 }));
+

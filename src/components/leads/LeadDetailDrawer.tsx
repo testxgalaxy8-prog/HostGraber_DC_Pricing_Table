@@ -1,9 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import {
+  AlertTriangle,
   ArrowRightLeft,
   CalendarClock,
   Clock,
   Edit3,
+  Mail,
   MessageCircle,
   Phone,
   Plus,
@@ -15,6 +17,7 @@ import {
   ALL_LEAD_STATUSES,
   LEAD_SOURCE_LABELS,
   LEAD_STATUS_META,
+  LEAD_TYPE_LABELS,
   addDaysIso,
   addMinutesToNow,
   formatLeadDisplayDate,
@@ -29,6 +32,7 @@ import { CallReminderPicker } from './CallReminderPicker.tsx';
 export function LeadDetailDrawer({
   leadId,
   canTransfer = false,
+  canDelete = false,
   onClose,
   onEditLead,
   onTransferLead,
@@ -39,6 +43,7 @@ export function LeadDetailDrawer({
 }: {
   leadId: number | null;
   canTransfer?: boolean;
+  canDelete?: boolean;
   onClose: () => void;
   onEditLead: (lead: LeadItem) => void;
   onTransferLead?: (lead: LeadItem) => void;
@@ -50,7 +55,7 @@ export function LeadDetailDrawer({
   const [lead, setLead] = useState<LeadItem | null>(null);
   const [loading, setLoading] = useState(false);
   const [remark, setRemark] = useState('');
-  const [statusAtCall, setStatusAtCall] = useState<LeadStatus>('call_needed');
+  const [statusAtCall, setStatusAtCall] = useState<LeadStatus>('new_lead');
   const [callDate, setCallDate] = useState(getTodayIsoDate());
   const [followUpDate, setFollowUpDate] = useState('');
   const [followUpTime, setFollowUpTime] = useState('');
@@ -203,7 +208,9 @@ export function LeadDetailDrawer({
     }
   };
 
-  const meta = lead ? LEAD_STATUS_META[lead.status] : LEAD_STATUS_META.call_needed;
+  const meta = lead
+    ? LEAD_STATUS_META[lead.status] || LEAD_STATUS_META.new_lead
+    : LEAD_STATUS_META.new_lead;
   const urgency = lead
     ? getFollowUpUrgency(lead.followUpDate, lead.status)
     : 'none';
@@ -231,9 +238,17 @@ export function LeadDetailDrawer({
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="font-mono-tabular font-bold text-[#0F172A]">
+                      {lead.leadCode}
+                    </span>
+                    <span aria-hidden="true" className="text-[#94A3B8]">·</span>
                     <span className={`inline-flex items-center gap-1.5 font-semibold ${meta.textClass}`}>
                       <span className={`w-2 h-2 rounded-full ${meta.indicatorClass}`} />
                       {meta.label}
+                    </span>
+                    <span aria-hidden="true" className="text-[#94A3B8]">·</span>
+                    <span className="text-[#334155] font-medium">
+                      {LEAD_TYPE_LABELS[lead.leadType]}
                     </span>
                     <span aria-hidden="true" className="text-[#94A3B8]">·</span>
                     <span className="text-[#475569]">
@@ -263,6 +278,18 @@ export function LeadDetailDrawer({
                       <Phone className="w-3.5 h-3.5" />
                       <span>{lead.phone}</span>
                     </a>
+                    {lead.email && (
+                      <>
+                        <span aria-hidden="true" className="text-[#CBD5E1]">|</span>
+                        <a
+                          href={`mailto:${lead.email}`}
+                          className="inline-flex items-center gap-1 font-sans hover:text-[#059669]"
+                        >
+                          <Mail className="w-3.5 h-3.5" />
+                          <span>{lead.email}</span>
+                        </a>
+                      </>
+                    )}
                     <span aria-hidden="true" className="text-[#CBD5E1]">|</span>
                     <span>
                       Follow-up:{' '}
@@ -289,6 +316,39 @@ export function LeadDetailDrawer({
                       </strong>
                     </span>
                   </div>
+                  {(lead.watcherNames.length > 0 || (lead.dealValue !== null && lead.dealValue !== undefined)) && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2.5 text-[11px] text-[#475569]">
+                      {lead.watcherNames.length > 0 && (
+                        <span>
+                          Watchers:{' '}
+                          <strong className="font-medium text-[#0F172A]">
+                            {lead.watcherNames.join(', ')}
+                          </strong>
+                        </span>
+                      )}
+                      {lead.dealValue !== null && lead.dealValue !== undefined && (
+                        <>
+                          {lead.watcherNames.length > 0 && (
+                            <span aria-hidden="true" className="text-[#94A3B8]">·</span>
+                          )}
+                          <span className="font-mono-tabular">
+                            Deal Value:{' '}
+                            <strong className="font-semibold text-[#0F172A]">
+                              {lead.dealValue.toLocaleString('en-IN')}
+                            </strong>
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {(lead.duplicatePhoneCount ?? 0) > 1 && (
+                    <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#FFFBEB] border border-[#FCD34D] text-[11px] font-medium text-[#B45309]">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        Duplicate contact number detected across {lead.duplicatePhoneCount} leads
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -340,37 +400,38 @@ export function LeadDetailDrawer({
                   </button>
                 )}
 
-                {!confirmDelete ? (
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDelete(true)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#B91C1C] bg-white border border-[#FCA5A5] hover:bg-[#FEF2F2] rounded-lg cursor-pointer ml-auto"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Delete</span>
-                  </button>
-                ) : (
-                  <div className="flex items-center gap-1.5 ml-auto bg-white border border-[#FCA5A5] rounded-lg px-2.5 py-1">
-                    <span className="text-[11px] font-medium text-[#B91C1C]">
-                      Delete lead?
-                    </span>
+                {canDelete &&
+                  (!confirmDelete ? (
                     <button
                       type="button"
-                      disabled={deleting}
-                      onClick={handleDelete}
-                      className="px-2 py-0.5 text-[11px] font-semibold text-white bg-red-600 hover:bg-red-700 rounded cursor-pointer"
+                      onClick={() => setConfirmDelete(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#B91C1C] bg-white border border-[#FCA5A5] hover:bg-[#FEF2F2] rounded-lg cursor-pointer ml-auto"
                     >
-                      {deleting ? '...' : 'Yes'}
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete</span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDelete(false)}
-                      className="px-1.5 py-0.5 text-[11px] text-[#475569] cursor-pointer"
-                    >
-                      No
-                    </button>
-                  </div>
-                )}
+                  ) : (
+                    <div className="flex items-center gap-1.5 ml-auto bg-white border border-[#FCA5A5] rounded-lg px-2.5 py-1">
+                      <span className="text-[11px] font-medium text-[#B91C1C]">
+                        Delete lead?
+                      </span>
+                      <button
+                        type="button"
+                        disabled={deleting}
+                        onClick={handleDelete}
+                        className="px-2 py-0.5 text-[11px] font-semibold text-white bg-red-600 hover:bg-red-700 rounded cursor-pointer"
+                      >
+                        {deleting ? '...' : 'Yes'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDelete(false)}
+                        className="px-1.5 py-0.5 text-[11px] text-[#475569] cursor-pointer"
+                      >
+                        No
+                      </button>
+                    </div>
+                  ))}
               </div>
             </div>
 
@@ -382,10 +443,10 @@ export function LeadDetailDrawer({
               >
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-semibold text-[#0F172A]">
-                    Log Call Update & Remark
+                    Log Call Update &amp; Lead Remark
                   </h4>
                   <span className="text-[11px] text-[#64748B]">
-                    Updates lead status & reminder timer
+                    Updates lead status &amp; reminder timer
                   </span>
                 </div>
 
@@ -393,7 +454,7 @@ export function LeadDetailDrawer({
                   rows={3}
                   value={remark}
                   onChange={(e) => setRemark(e.target.value)}
-                  placeholder="Write what the client said on this call..."
+                  placeholder="Write what update was discussed on this call..."
                   className="w-full p-2.5 text-sm bg-white border border-[#CBD5E1] rounded-lg text-[#0F172A] focus:outline-none focus:border-[#17C964]"
                 />
 

@@ -412,7 +412,7 @@ export function LeadReminderCenter({
           <div
             role="dialog"
             aria-label="Call timers and reminder notifications"
-            className="absolute right-0 top-full mt-2 w-[min(410px,calc(100vw-1.5rem))] bg-white border border-[#E2E8F0] rounded-2xl shadow-2xl overflow-hidden z-50"
+            className="fixed inset-x-3 top-16 sm:inset-x-auto sm:absolute sm:right-0 sm:top-full mt-1.5 sm:mt-2 sm:w-[410px] bg-white border border-[#E2E8F0] rounded-2xl shadow-2xl overflow-hidden z-50"
           >
             <div className="px-4 py-3 border-b border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between gap-2">
               <div className="min-w-0">

@@ -10,8 +10,11 @@ interface ParsedImportResponse {
 }
 
 type ColumnTarget =
+  | 'leadCode'
   | 'name'
   | 'phone'
+  | 'email'
+  | 'leadType'
   | 'remark'
   | 'status'
   | 'source'
@@ -31,8 +34,11 @@ function autoMapHeaders(headers: string[]): Record<ColumnTarget, string> {
   };
 
   return {
+    leadCode: findMatch([/lead.*id/, /lead.*code/, /^id$/, /ref/]),
     name: findMatch([/name/, /client/, /customer/, /contact/]),
     phone: findMatch([/phone/, /mobile/, /whatsapp/, /number/, /contact.*no/]),
+    email: findMatch([/email/, /e-mail/, /mail/]),
+    leadType: findMatch([/lead.*type/, /^type$/, /b2b/, /retail/]),
     remark: findMatch([/remark/, /note/, /update/, /comment/, /message/, /query/]),
     status: findMatch([/status/, /stage/, /outcome/, /state/]),
     source: findMatch([/source/, /channel/, /origin/]),
@@ -119,8 +125,11 @@ export function LeadImportModal({
   const [headers, setHeaders] = useState<string[]>([]);
   const [rawRows, setRawRows] = useState<Array<Record<string, string>>>([]);
   const [mapping, setMapping] = useState<Record<ColumnTarget, string>>({
+    leadCode: '',
     name: '',
     phone: '',
+    email: '',
+    leadType: '',
     remark: '',
     status: '',
     source: '',
@@ -139,8 +148,11 @@ export function LeadImportModal({
     setHeaders([]);
     setRawRows([]);
     setMapping({
+      leadCode: '',
       name: '',
       phone: '',
+      email: '',
+      leadType: '',
       remark: '',
       status: '',
       source: '',
@@ -164,11 +176,14 @@ export function LeadImportModal({
     if (!mapping.name || !mapping.phone) return [];
     return rawRows
       .map((row) => ({
+        leadCode: mapping.leadCode ? (row[mapping.leadCode] || '').trim() : '',
         name: (row[mapping.name] || '').trim(),
         phone: (row[mapping.phone] || '').trim(),
+        email: mapping.email ? (row[mapping.email] || '').trim() : '',
+        leadType: mapping.leadType ? (row[mapping.leadType] || '').trim() : 'retail',
         remark: mapping.remark ? (row[mapping.remark] || '').trim() : '',
-        status: mapping.status ? (row[mapping.status] || '').trim() : 'call_needed',
-        source: mapping.source ? (row[mapping.source] || '').trim() : 'csv_import',
+        status: mapping.status ? (row[mapping.status] || '').trim() : 'new_lead',
+        source: mapping.source ? (row[mapping.source] || '').trim() : 'import',
         leadDate: mapping.leadDate ? (row[mapping.leadDate] || '').trim() : '',
         followUpDate: mapping.followUpDate
           ? (row[mapping.followUpDate] || '').trim()
@@ -371,8 +386,11 @@ export function LeadImportModal({
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                 {(
                   [
-                    ['name', 'Client Name *'],
-                    ['phone', 'Mobile Number *'],
+                    ['leadCode', 'Lead ID'],
+                    ['name', 'Contact Name *'],
+                    ['phone', 'Contact Number *'],
+                    ['email', 'Email'],
+                    ['leadType', 'Lead Type (Retail/B2B)'],
                     ['remark', 'Call Remark'],
                     ['status', 'Lead Status'],
                     ['source', 'Lead Source'],
